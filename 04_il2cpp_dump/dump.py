@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-04_il2cpp_dump/dump.py - Modular Il2CppDumper Runner
-Executes Il2CppDumper on target libil2cpp.so and decrypted global-metadata.dat,
-validating fresh generation of dump.cs and script.json.
-
-Usage:
-    python dump.py --so ./bin/libil2cpp.so --metadata ./bin/global-metadata.dec.dat --out ./dump
-                   [--dumper ../tools/Il2CppDumper/Il2CppDumper.exe]
+04_il2cpp_dump/dump.py - Stage 4: Il2CppDumper Runner
+Runs Il2CppDumper on binary and decrypted metadata.
+Can be executed as a CLI script, imported as Stage4Dump(BaseStage), or called via MCP.
 """
 
 import argparse
@@ -17,21 +13,27 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from core.stage_base import BaseStage, StageResult
+except ImportError:
+    BaseStage = object
 
-def run_dumper(so_path, meta_path, out_dir, dumper_exe, log_path=None):
+DEFAULT_DUMPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "tools", "Il2CppDumper", "Il2CppDumper.exe")
+
+
+def run_dumper(so_path, meta_path, out_dir, dumper_exe=None, log_path=None):
     os.makedirs(out_dir, exist_ok=True)
+    dumper_exe = dumper_exe or DEFAULT_DUMPER
 
     if not os.path.exists(so_path):
-        print(f"[FAIL] libil2cpp.so not found: {so_path}", file=sys.stderr)
-        return False
+        raise FileNotFoundError(f"libil2cpp.so not found: {so_path}")
     if not os.path.exists(meta_path):
-        print(f"[FAIL] Metadata file not found: {meta_path}", file=sys.stderr)
-        return False
+        raise FileNotFoundError(f"Metadata file not found: {meta_path}")
     if not os.path.exists(dumper_exe):
-        print(f"[FAIL] Il2CppDumper executable not found: {dumper_exe}", file=sys.stderr)
-        return False
+        raise FileNotFoundError(f"Il2CppDumper executable not found: {dumper_exe}")
 
-    # Clean old dump files to guarantee freshness
     for f in ["dump.cs", "script.json", "il2cpp.h", "stringliteral.json"]:
         p = os.path.join(out_dir, f)
         if os.path.exists(p):
@@ -45,31 +47,22 @@ def run_dumper(so_path, meta_path, out_dir, dumper_exe, log_path=None):
     print(f"[*] Running Il2CppDumper...\n    SO: {so_path}\n    Metadata: {meta_path}\n    Output: {out_dir}")
 
     cmd = [os.path.abspath(dumper_exe), os.path.abspath(so_path), os.path.abspath(meta_path), os.path.abspath(out_dir)]
-
-    # Run Il2CppDumper from its own directory so it loads its local config.json
     dumper_cwd = os.path.dirname(os.path.abspath(dumper_exe))
 
-    try:
-        with open(log_file, "w", encoding="utf-8", errors="replace") as lf:
-            proc = subprocess.run(cmd, cwd=dumper_cwd, stdout=lf, stderr=subprocess.STDOUT, text=True, check=False)
-    except Exception as e:
-        print(f"[FAIL] Could not start Il2CppDumper process: {e}", file=sys.stderr)
-        return False
+    with open(log_file, "w", encoding="utf-8", errors="replace") as lf:
+        proc = subprocess.run(cmd, cwd=dumper_cwd, stdout=lf, stderr=subprocess.STDOUT, text=True, check=False)
 
     elapsed = time.time() - t0
     dump_cs = os.path.join(out_dir, "dump.cs")
     script_json = os.path.join(out_dir, "script.json")
 
-    # Read log
     log_content = ""
     if os.path.exists(log_file):
         with open(log_file, "r", encoding="utf-8", errors="replace") as lf:
             log_content = lf.read()
 
-    # Success criteria: dump.cs and script.json exist and are freshly written
     if not os.path.exists(dump_cs) or not os.path.exists(script_json):
-        print(f"[FAIL] Il2CppDumper did not produce expected output files. Return code: {proc.returncode}", file=sys.stderr)
-        print("Last log lines:\n" + "\n".join(log_content.splitlines()[-15:]), file=sys.stderr)
+        print(f"[FAIL] Il2CppDumper failed. Exit code: {proc.returncode}\n{log_content[-500:]}", file=sys.stderr)
         return False
 
     cs_size = os.path.getsize(dump_cs)
@@ -78,8 +71,6 @@ def run_dumper(so_path, meta_path, out_dir, dumper_exe, log_path=None):
     if cs_size == 0 or sj_size == 0:
         print("[FAIL] Generated dump files are empty.", file=sys.stderr)
         return False
-
-    print(f"[OK] Il2CppDumper finished in {elapsed:.1f}s. dump.cs: {cs_size / (1024*1024):.1f} MB, script.json: {sj_size / (1024*1024):.1f} MB")
 
     manifest = {
         "timestamp": datetime.datetime.now().isoformat(),
@@ -90,10 +81,51 @@ def run_dumper(so_path, meta_path, out_dir, dumper_exe, log_path=None):
         "script_json_size": sj_size,
         "log_file": log_file
     }
-    with open(os.path.join(out_dir, "dump_manifest.json"), "w", encoding="utf-8") as f:
+    manifest_path = os.path.join(out_dir, "dump_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
-    return True
+    return manifest
+
+
+class Stage4Dump(BaseStage):
+    stage_id = 4
+    name = "04_il2cpp_dump"
+    description = "Executes Il2CppDumper and verifies generation of dump.cs and script.json."
+
+    def validate_inputs(self, workspace: str, config: dict):
+        bin_dir = os.path.join(workspace, "bin")
+        so_path = config.get("so_path") or os.path.join(bin_dir, "libil2cpp.so")
+        meta_path = config.get("meta_path") or os.path.join(bin_dir, "global-metadata.dec.dat")
+        if not os.path.exists(so_path):
+            return False, f"Missing binary at {so_path}"
+        if not os.path.exists(meta_path):
+            return False, f"Missing metadata at {meta_path}"
+        return True, ""
+
+    def execute(self, workspace: str, config: dict):
+        bin_dir = os.path.join(workspace, "bin")
+        dump_dir = os.path.join(workspace, "dump")
+        so_path = config.get("so_path") or os.path.join(bin_dir, "libil2cpp.so")
+        meta_path = config.get("meta_path") or os.path.join(bin_dir, "global-metadata.dec.dat")
+        dumper_exe = config.get("dumper_exe") or DEFAULT_DUMPER
+
+        manifest = run_dumper(so_path, meta_path, dump_dir, dumper_exe=dumper_exe)
+        if not manifest:
+            raise RuntimeError("Il2CppDumper execution failed.")
+
+        manifest["output_files"] = [manifest["dump_cs"], manifest["script_json"], os.path.join(dump_dir, "dump_manifest.json")]
+        return manifest
+
+    def validate_outputs(self, workspace: str, config: dict):
+        dump_dir = os.path.join(workspace, "dump")
+        dump_cs = os.path.join(dump_dir, "dump.cs")
+        script_json = os.path.join(dump_dir, "script.json")
+        if not os.path.exists(dump_cs) or os.path.getsize(dump_cs) == 0:
+            return False, f"Missing or empty {dump_cs}"
+        if not os.path.exists(script_json) or os.path.getsize(script_json) == 0:
+            return False, f"Missing or empty {script_json}"
+        return True, ""
 
 
 def main():
@@ -101,13 +133,12 @@ def main():
     parser.add_argument("--so", required=True, help="Path to libil2cpp.so")
     parser.add_argument("--metadata", required=True, help="Path to global-metadata.dec.dat")
     parser.add_argument("--out", required=True, help="Output directory for dump")
-    parser.add_argument("--dumper", default="../tools/Il2CppDumper/Il2CppDumper.exe",
-                        help="Path to Il2CppDumper.exe")
+    parser.add_argument("--dumper", default=DEFAULT_DUMPER, help="Path to Il2CppDumper.exe")
     parser.add_argument("--log", help="Path to log file")
 
     args = parser.parse_args()
-    success = run_dumper(args.so, args.metadata, args.out, args.dumper, args.log)
-    if not success:
+    manifest = run_dumper(args.so, args.metadata, args.out, args.dumper, args.log)
+    if not manifest:
         sys.exit(1)
 
 

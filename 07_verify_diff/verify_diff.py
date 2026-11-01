@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-07_verify_diff/verify_diff.py - Offset Sanity Verification & Diff Gate
+07_verify_diff/verify_diff.py - Stage 7: Offset Sanity Verification & Diff Gate
 Validates generated offsets against executable binaries, checks that all symbols
 used in src/ exist, generates diff reports against previous versions, and handles backups.
-
-Usage:
-    python verify_diff.py --new ./build/offsets.h [--old ./src/core/offsets.h] \
-                          [--so ./bin/libil2cpp.so] [--src ./src] [--profile ../profiles/royale.json] \
-                          [--apply-to ./src/core/offsets.h] [--backup-dir ./backups]
+Can be executed as a CLI script, imported as Stage7Verify(BaseStage), or called via MCP.
 """
 
 import argparse
@@ -17,6 +13,12 @@ import shutil
 import struct
 import sys
 from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from core.stage_base import BaseStage, StageResult
+except ImportError:
+    BaseStage = object
 
 CONST_RE = re.compile(r"constexpr\s+(?:uintptr_t|int|unsigned|uint32_t|uint64_t|int32_t)\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;")
 NS_OPEN_RE = re.compile(r"^\s*namespace\s+(\w+)\s*\{")
@@ -81,6 +83,118 @@ def diff_headers(old_map, new_map):
     return changes, added, removed
 
 
+def verify_and_diff(new_path, old_path=None, so_path=None, src_dir=None,
+                    profile_data=None, known_tag=None, apply_to=None, backup_dir=None):
+    if not os.path.exists(new_path):
+        raise FileNotFoundError(f"New header not found: {new_path}")
+
+    new_map = parse_header(new_path)
+    fails = []
+
+    # 1. Sanity Checks
+    so_size = os.path.getsize(so_path) if so_path and os.path.exists(so_path) else None
+    for name, val in new_map.items():
+        if "::" not in name:
+            if val % 4 != 0:
+                fails.append(f"Method not 4-aligned: {name}=0x{val:X}")
+            if so_size and val >= so_size:
+                fails.append(f"Method RVA outside binary size: {name}=0x{val:X}")
+        elif name.startswith("TypeInfo::"):
+            if val % 8 != 0:
+                fails.append(f"TypeInfo not 8-aligned: {name}=0x{val:X}")
+            if so_size and val >= so_size:
+                fails.append(f"TypeInfo offset outside binary size: {name}=0x{val:X}")
+        elif not name.startswith("Native::"):
+            if val >= 0x10000 or val <= 0:
+                fails.append(f"Field offset out of sanity range (0..0x10000): {name}=0x{val:X}")
+
+    # 2. Source Code Undefined Symbol Check
+    if src_dir and os.path.isdir(src_dir):
+        used_syms = scan_source_symbols(src_dir)
+        missing_in_header = [s for s in sorted(used_syms) if s not in new_map]
+        if missing_in_header:
+            fails.append(f"Source code uses {len(missing_in_header)} undefined symbols: {missing_in_header[:5]}")
+
+    # 3. Known profile assertions
+    if profile_data and known_tag:
+        known_dict = profile_data.get("known_checks", {}).get(known_tag, {})
+        for k, v_str in known_dict.items():
+            expected = int(v_str, 0)
+            actual = new_map.get(k)
+            if actual is None:
+                fails.append(f"Known check [{known_tag}] missing symbol: {k}")
+            elif actual != expected:
+                fails.append(f"Known check [{known_tag}] mismatch for {k}: expected 0x{expected:X}, got 0x{actual:X}")
+
+    # 4. Diff Report
+    changes, added, removed = [], [], []
+    if old_path and os.path.exists(old_path):
+        old_map = parse_header(old_path)
+        changes, added, removed = diff_headers(old_map, new_map)
+
+    if fails:
+        raise ValueError(f"Verification errors:\n" + "\n".join(f"  * {f}" for f in fails))
+
+    # 5. Apply
+    applied_file = None
+    if apply_to:
+        dst = os.path.abspath(apply_to)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if backup_dir:
+            os.makedirs(backup_dir, exist_ok=True)
+        if os.path.exists(dst) and backup_dir:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = os.path.join(backup_dir, f"offsets.h.{timestamp}")
+            shutil.copy2(dst, backup_file)
+        shutil.copy2(new_path, dst)
+        applied_file = dst
+
+    return {
+        "constants_count": len(new_map),
+        "changes_count": len(changes),
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "applied_file": applied_file
+    }
+
+
+class Stage7Verify(BaseStage):
+    stage_id = 7
+    name = "07_verify_diff"
+    description = "Sanity verification, symbol integrity check against src/, and diff report."
+
+    def validate_inputs(self, workspace: str, config: dict):
+        new_header = config.get("new_header") or os.path.join(workspace, "offsets.h")
+        if not os.path.exists(new_header):
+            return False, f"Missing header to verify at {new_header}"
+        return True, ""
+
+    def execute(self, workspace: str, config: dict):
+        new_header = config.get("new_header") or os.path.join(workspace, "offsets.h")
+        old_header = config.get("old_header")
+        so_path = config.get("so_path") or os.path.join(workspace, "bin", "libil2cpp.so")
+        src_dir = config.get("src_dir")
+        profile_data = config.get("profile")
+        known_tag = config.get("known")
+        apply_to = config.get("apply_to")
+        backup_dir = config.get("backup_dir") or os.path.join(workspace, "backups")
+
+        res = verify_and_diff(
+            new_path=new_header,
+            old_path=old_header,
+            so_path=so_path,
+            src_dir=src_dir,
+            profile_data=profile_data,
+            known_tag=known_tag,
+            apply_to=apply_to,
+            backup_dir=backup_dir
+        )
+        return res
+
+    def validate_outputs(self, workspace: str, config: dict):
+        return True, ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="Verify generated offsets and diff against existing.")
     parser.add_argument("--new", required=True, help="Path to newly generated offsets.h")
@@ -95,105 +209,29 @@ def main():
 
     args = parser.parse_args()
 
-    if not os.path.exists(args.new):
-        print(f"[FAIL] New header not found: {args.new}", file=sys.stderr)
-        sys.exit(1)
-
-    new_map = parse_header(args.new)
-    print(f"[*] Parsed {len(new_map)} constants from {args.new}")
-
-    fails = []
-
-    # 1. Sanity Checks
-    so_size = os.path.getsize(args.so) if args.so and os.path.exists(args.so) else None
-    for name, val in new_map.items():
-        if "::" not in name:
-            # Top-level Method RVA
-            if val % 4 != 0:
-                fails.append(f"Method not 4-aligned: {name}=0x{val:X}")
-            if so_size and val >= so_size:
-                fails.append(f"Method RVA outside binary size: {name}=0x{val:X}")
-        elif name.startswith("TypeInfo::"):
-            # TypeInfo pointer
-            if val % 8 != 0:
-                fails.append(f"TypeInfo not 8-aligned: {name}=0x{val:X}")
-            if so_size and val >= so_size:
-                fails.append(f"TypeInfo offset outside binary size: {name}=0x{val:X}")
-        elif not name.startswith("Native::"):
-            # Field offset
-            if val >= 0x10000 or val <= 0:
-                fails.append(f"Field offset out of sanity range (0..0x10000): {name}=0x{val:X}")
-
-    # 2. Source Code Undefined Symbol Check
-    if args.src and os.path.isdir(args.src):
-        used_syms = scan_source_symbols(args.src)
-        missing_in_header = []
-        for sym in sorted(used_syms):
-            if sym not in new_map:
-                missing_in_header.append(sym)
-        if missing_in_header:
-            fails.append(f"Source code uses {len(missing_in_header)} undefined symbols: {missing_in_header[:5]}")
-        else:
-            print(f"[OK] All {len(used_syms)} symbols referenced in src/ are defined in the new header.")
-
-    # 3. Known profile assertions
-    if args.profile and args.known and os.path.exists(args.profile):
+    profile_data = None
+    if args.profile and os.path.exists(args.profile):
         import json
         with open(args.profile, "r", encoding="utf-8") as pf:
-            pdata = json.load(pf)
-        known_dict = pdata.get("known_checks", {}).get(args.known, {})
-        for k, v_str in known_dict.items():
-            expected = int(v_str, 0)
-            actual = new_map.get(k)
-            if actual is None:
-                fails.append(f"Known check [{args.known}] missing symbol: {k}")
-            elif actual != expected:
-                fails.append(f"Known check [{args.known}] mismatch for {k}: expected 0x{expected:X}, got 0x{actual:X}")
+            profile_data = json.load(pf)
 
-    # 4. Diff Report
-    diff_output = []
-    if args.old and os.path.exists(args.old):
-        old_map = parse_header(args.old)
-        changes, added, removed = diff_headers(old_map, new_map)
-        diff_output.append("\n=======================================================")
-        diff_output.append(f" DIFF REPORT: {len(changes)} changed, {len(added)} added, {len(removed)} removed")
-        diff_output.append("=======================================================")
-        for k, old_v, new_v in changes[:30]:
-            diff_output.append(f" ~ {k:<45} 0x{old_v:X} -> 0x{new_v:X}")
-        if len(changes) > 30:
-            diff_output.append(f"   ... and {len(changes) - 30} more changes")
-        for k, new_v in added[:15]:
-            diff_output.append(f" + {k:<45} 0x{new_v:X}")
-        for k, old_v in removed[:15]:
-            diff_output.append(f" - {k:<45} 0x{old_v:X}")
-        print("\n".join(diff_output))
-
-    if args.report:
-        with open(args.report, "w", encoding="utf-8") as rf:
-            rf.write("\n".join(diff_output))
-
-    if fails:
-        print("\n[FAIL] Offset verification encountered errors:", file=sys.stderr)
-        for f in fails:
-            print(f"  * {f}", file=sys.stderr)
+    try:
+        res = verify_and_diff(
+            new_path=args.new,
+            old_path=args.old,
+            so_path=args.so,
+            src_dir=args.src,
+            profile_data=profile_data,
+            known_tag=args.known,
+            apply_to=args.apply_to,
+            backup_dir=args.backup_dir
+        )
+        print(f"[OK] All {res['constants_count']} constants verified cleanly.")
+        if res.get("applied_file"):
+            print(f"[OK] Applied to: {res['applied_file']}")
+    except Exception as e:
+        print(f"[FAIL] {e}", file=sys.stderr)
         sys.exit(1)
-
-    print("\n[OK] All verification checks passed cleanly!")
-
-    # 5. Apply with backup
-    if args.apply_to:
-        dst = os.path.abspath(args.apply_to)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        os.makedirs(args.backup_dir, exist_ok=True)
-
-        if os.path.exists(dst):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = os.path.join(args.backup_dir, f"offsets.h.{timestamp}")
-            shutil.copy2(dst, backup_file)
-            print(f"[OK] Backed up previous header to: {backup_file}")
-
-        shutil.copy2(args.new, dst)
-        print(f"[OK] Applied new header to: {dst}")
 
 
 if __name__ == "__main__":

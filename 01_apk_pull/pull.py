@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
-01_apk_pull/pull.py - Modular APK Puller
-Fetches APKs (base + splits) from an Android device via ADB or accepts local APK paths.
-
-Usage:
-    python pull.py --package com.example.game --out ./output_apk [--device 127.0.0.1:7555] [--arch arm64]
-    python pull.py --apk-path C:/path/base.apk C:/path/split.apk --out ./output_apk
+01_apk_pull/pull.py - Stage 1: APK Puller
+Fetches APKs from an Android device via ADB or accepts local APK paths.
+Can be executed as a CLI script, imported as Stage1Pull(BaseStage), or called via MCP.
 """
 
 import argparse
@@ -14,6 +11,13 @@ import os
 import shutil
 import subprocess
 import sys
+
+# Support both package and standalone import
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from core.stage_base import BaseStage, StageResult
+except ImportError:
+    BaseStage = object
 
 
 def run_cmd(cmd):
@@ -30,7 +34,6 @@ def pull_from_device(package, out_dir, device=None, arch="arm64"):
     if device:
         adb_cmd.extend(["-s", device])
 
-    # Check ADB presence
     rc, stdout, stderr = run_cmd(adb_cmd + ["devices"])
     if rc != 0:
         print(f"[FAIL] ADB execution failed: {stderr}", file=sys.stderr)
@@ -49,8 +52,6 @@ def pull_from_device(package, out_dir, device=None, arch="arm64"):
         remote_path = line.replace("package:", "").strip()
         leaf = os.path.basename(remote_path)
 
-        # Filter: keep base.apk and splits matching the target architecture.
-        # Skip language/density splits to save time and bandwidth.
         if leaf != "base.apk" and arch not in leaf:
             print(f"  [i] Skipping irrelevant split: {leaf}")
             continue
@@ -79,6 +80,50 @@ def copy_local_apks(apk_paths, out_dir):
             shutil.copy2(p, dst)
         pulled_apks.append(os.path.abspath(dst))
     return pulled_apks
+
+
+class Stage1Pull(BaseStage):
+    stage_id = 1
+    name = "01_apk_pull"
+    description = "Pulls target APK (and split APKs) via ADB or copies from local filesystem."
+
+    def validate_inputs(self, workspace: str, config: dict):
+        if not config.get("apk_paths") and not config.get("package"):
+            return False, "Either 'package' or 'apk_paths' must be configured."
+        return True, ""
+
+    def execute(self, workspace: str, config: dict):
+        out_dir = os.path.join(workspace, "apk")
+        os.makedirs(out_dir, exist_ok=True)
+
+        apk_paths = config.get("apk_paths")
+        package = config.get("package")
+        device = config.get("device", "127.0.0.1:7555")
+        arch = config.get("arch", "arm64-v8a").split("-")[0]
+
+        if apk_paths:
+            apks = copy_local_apks(apk_paths, out_dir)
+        else:
+            apks = pull_from_device(package, out_dir, device=device, arch=arch)
+
+        if not apks:
+            raise RuntimeError(f"Failed to acquire APKs for {package or apk_paths}")
+
+        manifest_path = os.path.join(out_dir, "apk_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump({"apks": apks}, f, indent=2)
+
+        return {
+            "apks": apks,
+            "manifest": manifest_path,
+            "output_files": apks + [manifest_path]
+        }
+
+    def validate_outputs(self, workspace: str, config: dict):
+        manifest_path = os.path.join(workspace, "apk", "apk_manifest.json")
+        if not os.path.exists(manifest_path):
+            return False, f"Missing expected output: {manifest_path}"
+        return True, ""
 
 
 def main():

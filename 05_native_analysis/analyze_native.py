@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-05_native_analysis/analyze_native.py - Native ELF Binary Offset Analyzer
+05_native_analysis/analyze_native.py - Stage 5: Native ELF Binary Offset Analyzer
 Inspects native ELF shared libraries (e.g. libunity.so) to extract GOT slot file offsets
-(such as eglSwapBuffers) and .rodata string offsets (such as libswappywrapper).
-
-Usage:
-    python analyze_native.py --lib ./bin/libunity.so --json ./native.json [--rules rules.json]
+and .rodata string offsets.
+Can be executed as a CLI script, imported as Stage5Native(BaseStage), or called via MCP.
 """
 
 import argparse
@@ -13,6 +11,12 @@ import json
 import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from core.stage_base import BaseStage, StageResult
+except ImportError:
+    BaseStage = object
 
 PT_LOAD, PT_DYNAMIC = 1, 2
 SHT_RELA, SHT_DYNSYM = 4, 11
@@ -132,7 +136,6 @@ def analyze(lib_path, rules=None):
     res = {}
     rules = rules or {}
 
-    # Check EGL GOT rule (default: true if rules has egl_swap_got or if rules is empty)
     if rules.get("egl_swap_got", True):
         va, off = find_egl_swap_got(elf)
         if off is not None:
@@ -142,7 +145,6 @@ def analyze(lib_path, rules=None):
         else:
             print("[WARN] Could not find eglSwapBuffers GOT slot in ELF.")
 
-    # Check string rule
     swappy_needle = rules.get("swappy_string", "libswappywrapper")
     if swappy_needle:
         str_off = find_swappy_name(elf, swappy_needle.encode("latin-1"))
@@ -153,6 +155,37 @@ def analyze(lib_path, rules=None):
             print(f"[WARN] String '{swappy_needle}' not found in binary.")
 
     return res
+
+
+class Stage5Native(BaseStage):
+    stage_id = 5
+    name = "05_native_analysis"
+    description = "Inspects native ELF shared libraries to extract GOT slots and .rodata strings."
+
+    def validate_inputs(self, workspace: str, config: dict):
+        return True, ""
+
+    def execute(self, workspace: str, config: dict):
+        lib_path = config.get("native_lib") or os.path.join(workspace, "bin", "libunity.so")
+        out_json = config.get("native_json") or os.path.join(workspace, "native.json")
+        rules = config.get("native_rules", {})
+
+        offsets = analyze(lib_path, rules)
+        os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(offsets, f, indent=2)
+
+        return {
+            "offsets": offsets,
+            "json_path": out_json,
+            "output_files": [out_json]
+        }
+
+    def validate_outputs(self, workspace: str, config: dict):
+        out_json = config.get("native_json") or os.path.join(workspace, "native.json")
+        if not os.path.exists(out_json):
+            return False, f"Missing output {out_json}"
+        return True, ""
 
 
 def main():

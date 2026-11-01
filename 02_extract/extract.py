@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-02_extract/extract.py - Modular Binary & Metadata Extractor
+02_extract/extract.py - Stage 2: Binary & Metadata Extractor
 Extracts libil2cpp.so, libunity.so (if available), and global-metadata.dat
-from single or split APK files using pure Python zipfile (no Java / apktool required).
-
-Usage:
-    python extract.py --apks base.apk split.apk --out ./workspace/bin --arch arm64-v8a
-    python extract.py --manifest ./workspace/apk/apk_manifest.json --out ./workspace/bin
+from single or split APK files using pure Python zipfile.
+Can be executed as a CLI script, imported as Stage2Extract(BaseStage), or called via MCP.
 """
 
 import argparse
@@ -15,24 +12,25 @@ import os
 import sys
 import zipfile
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from core.stage_base import BaseStage, StageResult
+except ImportError:
+    BaseStage = object
+
 
 def extract_binaries(apks, out_dir, arch="arm64-v8a", extra_libs=None):
     os.makedirs(out_dir, exist_ok=True)
     extra_libs = extra_libs or []
 
-    # Mapping of zip internal paths to destination filenames
     wanted = {
         f"lib/{arch}/libil2cpp.so": os.path.join(out_dir, "libil2cpp.so"),
         "assets/bin/Data/Managed/Metadata/global-metadata.dat": os.path.join(out_dir, "global-metadata.dat"),
     }
-
-    # Optional Unity engine library (if present)
     wanted[f"lib/{arch}/libunity.so"] = os.path.join(out_dir, "libunity.so")
-
     for lib in extra_libs:
         wanted[f"lib/{arch}/{lib}"] = os.path.join(out_dir, lib)
 
-    # Clean existing destination files
     for dst in wanted.values():
         if os.path.exists(dst):
             try:
@@ -61,7 +59,6 @@ def extract_binaries(apks, out_dir, arch="arm64-v8a", extra_libs=None):
             print(f"[FAIL] Error reading {apk_path}: {e}", file=sys.stderr)
             return None
 
-    # Verify critical files
     crit_il2cpp = f"lib/{arch}/libil2cpp.so"
     crit_meta = "assets/bin/Data/Managed/Metadata/global-metadata.dat"
 
@@ -80,6 +77,51 @@ def extract_binaries(apks, out_dir, arch="arm64-v8a", extra_libs=None):
         "all_extracted": [wanted[k] for k in found]
     }
     return manifest
+
+
+class Stage2Extract(BaseStage):
+    stage_id = 2
+    name = "02_extract"
+    description = "Extracts libil2cpp.so, libunity.so, and global-metadata.dat from APKs."
+
+    def validate_inputs(self, workspace: str, config: dict):
+        manifest_path = os.path.join(workspace, "apk", "apk_manifest.json")
+        apks = config.get("apks")
+        if not apks and not os.path.exists(manifest_path):
+            return False, f"Missing APK input or manifest at {manifest_path}"
+        return True, ""
+
+    def execute(self, workspace: str, config: dict):
+        out_dir = os.path.join(workspace, "bin")
+        os.makedirs(out_dir, exist_ok=True)
+
+        apks = config.get("apks")
+        if not apks:
+            manifest_path = os.path.join(workspace, "apk", "apk_manifest.json")
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                apks = json.load(f).get("apks", [])
+
+        arch = config.get("arch", "arm64-v8a")
+        extra_libs = config.get("extra_libs", [])
+
+        res = extract_binaries(apks, out_dir, arch=arch, extra_libs=extra_libs)
+        if not res:
+            raise RuntimeError("Extraction of critical binaries failed.")
+
+        manifest_path = os.path.join(out_dir, "bin_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(res, f, indent=2)
+
+        res["output_files"] = res.get("all_extracted", []) + [manifest_path]
+        return res
+
+    def validate_outputs(self, workspace: str, config: dict):
+        bin_dir = os.path.join(workspace, "bin")
+        if not os.path.exists(os.path.join(bin_dir, "libil2cpp.so")):
+            return False, "Missing extracted libil2cpp.so"
+        if not os.path.exists(os.path.join(bin_dir, "global-metadata.dat")):
+            return False, "Missing extracted global-metadata.dat"
+        return True, ""
 
 
 def main():

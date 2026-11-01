@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 mcp_server.py - Model Context Protocol (MCP) Server for GSS4
-Exposes the IL2CPP offset extraction pipeline, profile management, and dump inspection tools
-to AI assistants (Claude, Gemini, Antigravity, Cursor, etc.).
+Exposes the IL2CPP offset extraction pipeline, individual stages, profile management,
+and dump inspection tools to AI assistants (Claude, Gemini, Antigravity, Cursor, etc.).
 
 Usage:
     python mcp_server.py
@@ -10,7 +10,7 @@ Usage:
 
 import json
 import os
-import re
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +25,7 @@ app = MCPServer("gss4-offset-pipeline")
 
 
 # ==============================================================================
-# TOOLS
+# PIPELINE & PROFILE TOOLS
 # ==============================================================================
 
 @app.tool()
@@ -119,6 +119,90 @@ def run_pipeline(
         }
 
 
+# ==============================================================================
+# INDIVIDUAL STAGE DEVELOPMENT TOOLS
+# ==============================================================================
+
+@app.tool()
+def run_stage(
+    stage_id: int,
+    workspace: str,
+    config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Run an individual pipeline stage (1 to 7) in complete isolation for development and testing.
+
+    Args:
+        stage_id: Stage number (1: Pull, 2: Extract, 3: Decrypt, 4: Dump, 5: Native, 6: Parse, 7: Verify)
+        workspace: Directory path where stage inputs and outputs reside
+        config: Optional dictionary of stage parameters and overrides
+    """
+    cfg = config or {}
+    stage_modules = {
+        1: ("01_apk_pull.pull", "Stage1Pull"),
+        2: ("02_extract.extract", "Stage2Extract"),
+        3: ("03_decrypt_metadata.decrypt", "Stage3Decrypt"),
+        4: ("04_il2cpp_dump.dump", "Stage4Dump"),
+        5: ("05_native_analysis.analyze_native", "Stage5Native"),
+        6: ("06_parse_offsets.parse_offsets", "Stage6Parse"),
+        7: ("07_verify_diff.verify_diff", "Stage7Verify"),
+    }
+
+    if stage_id not in stage_modules:
+        raise ValueError(f"Invalid stage_id: {stage_id}. Must be 1..7.")
+
+    mod_name, cls_name = stage_modules[stage_id]
+    import importlib
+    mod = importlib.import_module(mod_name)
+    stage_cls = getattr(mod, cls_name)
+    stage_instance = stage_cls()
+    result = stage_instance.run_stage(workspace, cfg)
+    return result.to_dict()
+
+
+@app.tool()
+def run_stage_tests(stage_id: Optional[int] = None) -> Dict[str, Any]:
+    """Execute unit tests for a specific stage or all stages (1..7).
+
+    Args:
+        stage_id: Target stage number (1..7), or None to run all stage test suites
+    """
+    from test_all_stages import STAGES
+
+    results = {}
+    targets = STAGES if stage_id is None else [STAGES[stage_id - 1]]
+
+    for title, test_script in targets:
+        proc = subprocess.run([sys.executable, test_script], cwd=os.path.dirname(test_script),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+        results[title] = {
+            "status": "passed" if proc.returncode == 0 else "failed",
+            "output": proc.stdout.strip()
+        }
+
+    return results
+
+
+@app.tool()
+def list_stage_plugins(stage_id: int) -> List[str]:
+    """List available plugins/strategies/generators for an extensible stage.
+
+    Args:
+        stage_id: 3 for Decrypt Strategies, 6 for Code Generators
+    """
+    if stage_id == 3:
+        strat_dir = os.path.join(ROOT_DIR, "03_decrypt_metadata", "strategies")
+        return [f[:-3] for f in os.listdir(strat_dir) if f.endswith(".py") and not f.startswith("__")]
+    elif stage_id == 6:
+        gen_dir = os.path.join(ROOT_DIR, "06_parse_offsets", "generators")
+        return [f[:-3] for f in os.listdir(gen_dir) if f.endswith(".py") and not f.startswith("__")]
+    else:
+        return [f"Stage {stage_id} uses core modular architecture."]
+
+
+# ==============================================================================
+# DUMP INSPECTION & OFFSET TOOLS
+# ==============================================================================
+
 @app.tool()
 def inspect_dump(
     query: str,
@@ -136,7 +220,6 @@ def inspect_dump(
     """
     dump_path = os.path.join(ROOT_DIR, "build", profile, "dump", "dump.cs")
     if not os.path.exists(dump_path):
-        # Check test workspace
         alt_path = os.path.join(ROOT_DIR, "build", "test", "dump", "dump.cs")
         if os.path.exists(alt_path):
             dump_path = alt_path
@@ -176,26 +259,32 @@ def get_offsets(profile: str = "royale", format: str = "json") -> Any:
 
     Args:
         profile: Profile name (default: 'royale')
-        format: Return format - 'json' for structured dict, 'header' for C++ text
+        format: Return format - 'json', 'header', 'rust', or 'csharp'
     """
     ws = os.path.join(ROOT_DIR, "build", profile)
     if not os.path.exists(ws):
         ws = os.path.join(ROOT_DIR, "build", "test")
 
-    if format == "json":
-        json_path = os.path.join(ws, "offsets.json")
-        if os.path.exists(json_path):
-            with open(json_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        raise FileNotFoundError(f"offsets.json not found in {ws}")
-    else:
-        header_path = os.path.join(ws, "offsets.h")
-        if not os.path.exists(header_path):
-            header_path = SRC_HEADER
-        if os.path.exists(header_path):
-            with open(header_path, "r", encoding="utf-8") as f:
-                return f.read()
-        raise FileNotFoundError("offsets.h not found.")
+    file_map = {
+        "json": "offsets.json",
+        "header": "offsets.h",
+        "rust": "offsets.rs",
+        "csharp": "Offsets.cs"
+    }
+
+    target_file = file_map.get(format, "offsets.json")
+    target_path = os.path.join(ws, target_file)
+
+    if not os.path.exists(target_path) and format == "header":
+        target_path = SRC_HEADER
+
+    if not os.path.exists(target_path):
+        raise FileNotFoundError(f"{target_file} not found in {ws}")
+
+    with open(target_path, "r", encoding="utf-8") as f:
+        if format == "json":
+            return json.load(f)
+        return f.read()
 
 
 @app.tool()
@@ -212,7 +301,6 @@ def diff_offsets(old_header: Optional[str] = None, new_header: Optional[str] = N
     if not os.path.exists(old_p) or not os.path.exists(new_p):
         return f"One or both files not found: old={old_p}, new={new_p}"
 
-    import subprocess
     cmd = [sys.executable, os.path.join(ROOT_DIR, "07_verify_diff", "verify_diff.py"),
            "--new", new_p, "--old", old_p]
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
@@ -220,7 +308,7 @@ def diff_offsets(old_header: Optional[str] = None, new_header: Optional[str] = N
 
 
 # ==============================================================================
-# RESOURCES
+# RESOURCES & PROMPTS
 # ==============================================================================
 
 @app.resource("offsets://current")
@@ -238,22 +326,17 @@ def resource_profiles_list() -> str:
     return json.dumps(list_profiles(), indent=2)
 
 
-# ==============================================================================
-# PROMPTS
-# ==============================================================================
-
 @app.prompt()
-def analyze_game_update(game_name: str = "royale") -> str:
-    """Prompt template for updating offsets when a game releases a new patch."""
-    return f"""A new update was released for {game_name}. Follow these steps using the GSS4 MCP tools:
-1. Call `get_profile(name='{game_name}')` to inspect the target configuration.
-2. Call `run_pipeline(profile='{game_name}')` to pull the new APK, decrypt metadata, run Il2CppDumper, and generate new offsets.
-3. Call `diff_offsets()` to review the changed RVAs, added fields, or removed symbols.
-4. If the sanity gates pass cleanly, call `run_pipeline(profile='{game_name}', apply=True)` to update the C++ project header with automatic backup."""
+def develop_stage(stage_id: int = 3) -> str:
+    """Prompt template for developing or extending a specific stage."""
+    return f"""You are developing GSS4 Stage {stage_id}. Follow these best practices:
+1. Call `list_stage_plugins(stage_id={stage_id})` to see current modules.
+2. Edit or add files in stage directory `0{stage_id}_.../`.
+3. Call `run_stage_tests(stage_id={stage_id})` to verify your changes.
+4. Call `run_stage(stage_id={stage_id}, workspace='build/test')` to run with real data."""
 
 
 def main():
-    # Run MCP server using standard stdio transport
     app.run(transport="stdio")
 
 
