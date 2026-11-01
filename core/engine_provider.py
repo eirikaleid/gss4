@@ -147,6 +147,29 @@ class GenericNativeProvider(BaseEngineProvider):
         )
 
 
+class GodotEngineProvider(BaseEngineProvider):
+    """Provider for Godot Engine games (GDScript/C# bytecode + libgodot)."""
+    engine_name = "godot"
+    display_name = "Godot Engine"
+
+    def get_default_targets(self, arch: str = "arm64-v8a") -> Dict[str, str]:
+        return {
+            f"lib/{arch}/libgodot_android.so": "libgodot.so",
+            f"lib/{arch}/libgodot.so": "libgodot.so",
+            "assets/*.pck": "main.pck",
+        }
+
+    def get_verification_policy(self) -> EngineVerificationPolicy:
+        return EngineVerificationPolicy(
+            engine_name="godot",
+            check_rva_alignment=True,
+            rva_alignment_bytes=4,
+            check_typeinfo_alignment=False,
+            max_field_offset=0x20000,
+            allow_zero_rva=True
+        )
+
+
 # ==============================================================================
 # PROVIDER REGISTRY
 # ==============================================================================
@@ -159,6 +182,7 @@ _PROVIDERS: Dict[str, BaseEngineProvider] = {
     "unreal": UnrealEngineProvider(),
     "ue4": UnrealEngineProvider(),
     "ue5": UnrealEngineProvider(),
+    "godot": GodotEngineProvider(),
     "native": GenericNativeProvider(),
     "generic": GenericNativeProvider(),
 }
