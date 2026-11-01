@@ -14,6 +14,13 @@ from .errors import (
     VerificationGateError,
 )
 from .logger import get_stage_logger
+from .common_ir import CommonIR, ClassIR, FieldIR, MethodIR, NativeSymbolIR
+from .engine_provider import (
+    BaseEngineProvider,
+    EngineVerificationPolicy,
+    get_engine_provider,
+    list_supported_engines
+)
 
 __all__ = [
     "BaseStage",
@@ -29,4 +36,13 @@ __all__ = [
     "NativeAnalysisError",
     "OffsetParseError",
     "VerificationGateError",
+    "CommonIR",
+    "ClassIR",
+    "FieldIR",
+    "MethodIR",
+    "NativeSymbolIR",
+    "BaseEngineProvider",
+    "EngineVerificationPolicy",
+    "get_engine_provider",
+    "list_supported_engines",
 ]

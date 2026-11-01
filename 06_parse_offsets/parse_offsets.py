@@ -41,11 +41,13 @@ try:
     from core.stage_base import BaseStage, StageResult
     from core.errors import OffsetParseError, StageInputError
     from core.logger import get_stage_logger
+    from core.common_ir import CommonIR, ClassIR, FieldIR, MethodIR, NativeSymbolIR
 except ImportError:
     BaseStage = object
     OffsetParseError = Exception
     StageInputError = Exception
     get_stage_logger = None
+    CommonIR = None
 
 from generators.cpp_gen import generate_cpp
 from generators.csharp_gen import generate_csharp
@@ -398,6 +400,12 @@ class Stage6Parse(BaseStage):
     ]
 
     def validate_inputs(self, workspace: str, config: dict):
+        # 1. Common IR mode: if symbols_ir.json exists, no dump.cs is needed!
+        ir_path = config.get("ir_path") or os.path.join(workspace, "dump", "symbols_ir.json")
+        if os.path.exists(ir_path):
+            return True, ""
+
+        # 2. Legacy dump.cs mode
         dump_dir = os.path.join(workspace, "dump")
         dump_cs = config.get("dump_cs") or os.path.join(dump_dir, "dump.cs")
         script_json = config.get("script_json") or os.path.join(dump_dir, "script.json")
@@ -413,6 +421,7 @@ class Stage6Parse(BaseStage):
 
     def execute(self, workspace: str, config: dict):
         dump_dir = os.path.join(workspace, "dump")
+        ir_path = config.get("ir_path") or os.path.join(dump_dir, "symbols_ir.json")
         dump_cs = config.get("dump_cs") or os.path.join(dump_dir, "dump.cs")
         script_json = config.get("script_json") or os.path.join(dump_dir, "script.json")
         so_path = config.get("so_path") or os.path.join(workspace, "bin", "libil2cpp.so")
@@ -423,21 +432,64 @@ class Stage6Parse(BaseStage):
             with open(profile_data, "r", encoding="utf-8") as pf:
                 profile_data = json.load(pf)
 
-        self.logger.info(f"Stage 6 Başlatıldı: dump.cs={dump_cs}, profil='{profile_data.get('name', 'default')}'")
+        # Check if Common IR already exists
+        if os.path.exists(ir_path) and CommonIR is not None:
+            self.logger.info(f"Stage 6: Ortak Ara Temsil (Common IR) tespit edildi: {ir_path}")
+            common_ir = CommonIR.load(ir_path)
+            data = common_ir.to_legacy_data_dict()
+        else:
+            self.logger.info(f"Stage 6 Başlatıldı: dump.cs={dump_cs}, profil='{profile_data.get('name', 'default')}'")
 
-        classes, bad_fields = parse_dump(dump_cs)
-        self.logger.debug(f"{len(classes)} adet C# sınıfı ayrıştırıldı.")
+            classes, bad_fields = parse_dump(dump_cs)
+            self.logger.debug(f"{len(classes)} adet C# sınıfı ayrıştırıldı.")
 
-        model = Model(classes, preferred_ns=profile_data.get("preferred_namespace", "GameMain"))
-        typeinfos = resolve_typeinfo(script_json, so_path, profile_data)
-        self.logger.debug(f"{len(typeinfos)} adet TypeInfo pointer çözüldü.")
+            model = Model(classes, preferred_ns=profile_data.get("preferred_namespace", "GameMain"))
+            typeinfos = resolve_typeinfo(script_json, so_path, profile_data)
+            self.logger.debug(f"{len(typeinfos)} adet TypeInfo pointer çözüldü.")
 
-        native_offsets = {}
-        if os.path.exists(native_json):
-            with open(native_json, "r", encoding="utf-8") as nf:
-                native_offsets = json.load(nf)
+            native_offsets = {}
+            if os.path.exists(native_json):
+                with open(native_json, "r", encoding="utf-8") as nf:
+                    native_offsets = json.load(nf)
 
-        data = extract_data_model(profile_data, model, typeinfos, native_offsets)
+            data = extract_data_model(profile_data, model, typeinfos, native_offsets)
+
+            # Convert to Common IR and save for future multi-engine compatibility
+            if CommonIR is not None:
+                os.makedirs(dump_dir, exist_ok=True)
+                ir_classes = {}
+                for cname, fmap in data["fields"].items():
+                    class_fields = {fn: FieldIR(name=fn, offset=fo) for fn, fo in fmap.items()}
+                    class_methods = {}
+                    for sym, rva in data.get("methods", {}).items():
+                        if sym.startswith(f"{cname}_"):
+                            mname = sym[len(cname) + 1:]
+                            class_methods[mname] = MethodIR(name=mname, rva=rva)
+                    ti_val = data.get("typeinfos", {}).get(cname)
+                    ir_classes[cname] = ClassIR(
+                        name=cname,
+                        type_info_file_offset=ti_val,
+                        fields=class_fields,
+                        methods=class_methods
+                    )
+
+                ir_native = {}
+                for sn, s_val in data.get("native", {}).items():
+                    ir_native[sn] = NativeSymbolIR(
+                        name=sn,
+                        library="libunity.so",
+                        file_offset=s_val
+                    )
+
+                cir = CommonIR(
+                    engine=profile_data.get("engine", "unity_il2cpp"),
+                    arch=profile_data.get("arch", "arm64-v8a"),
+                    package=profile_data.get("package"),
+                    classes=ir_classes,
+                    native_symbols=ir_native
+                )
+                cir.save(ir_path)
+                self.logger.info(f"Ortak Ara Temsil (Common IR) kaydedildi: {ir_path}")
 
         out_header = config.get("out_header") or os.path.join(workspace, "offsets.h")
         out_json = config.get("out_json") or os.path.join(workspace, "offsets.json")
@@ -467,6 +519,10 @@ class Stage6Parse(BaseStage):
         total_fields = sum(len(f) for f in data["fields"].values())
         self.logger.info(f"Kod üretimi tamamlandı: {len(data['methods'])} metot, {total_fields} alan, {len(data['typeinfos'])} TypeInfo")
 
+        out_files = [out_header, out_json, out_rust, out_csharp]
+        if os.path.exists(ir_path):
+            out_files.append(ir_path)
+
         return {
             "methods_count": len(data["methods"]),
             "fields_count": total_fields,
@@ -475,7 +531,8 @@ class Stage6Parse(BaseStage):
             "json_path": out_json,
             "rust_path": out_rust,
             "csharp_path": out_csharp,
-            "output_files": [out_header, out_json, out_rust, out_csharp]
+            "ir_path": ir_path if os.path.exists(ir_path) else None,
+            "output_files": out_files
         }
 
     def validate_outputs(self, workspace: str, config: dict):

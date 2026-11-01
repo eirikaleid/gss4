@@ -40,11 +40,14 @@ try:
     from core.stage_base import BaseStage, StageResult
     from core.errors import VerificationGateError, StageInputError
     from core.logger import get_stage_logger
+    from core.engine_provider import get_engine_provider, EngineVerificationPolicy
 except ImportError:
     BaseStage = object
     VerificationGateError = Exception
     StageInputError = Exception
     get_stage_logger = None
+    get_engine_provider = None
+    EngineVerificationPolicy = None
 
 CONST_RE = re.compile(r"constexpr\s+(?:uintptr_t|int|unsigned|uint32_t|uint64_t|int32_t)\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;")
 NS_OPEN_RE = re.compile(r"^\s*namespace\s+(\w+)\s*\{")
@@ -117,22 +120,32 @@ def verify_and_diff(new_path, old_path=None, so_path=None, src_dir=None,
     new_map = parse_header(new_path)
     fails = []
 
-    # 1. Sanity Checks
+    # 1. Sanity Checks using Engine Verification Policy
+    engine_name = profile_data.get("engine", "unity_il2cpp") if profile_data else "unity_il2cpp"
+    if get_engine_provider:
+        policy = get_engine_provider(engine_name).get_verification_policy()
+    else:
+        policy = EngineVerificationPolicy() if EngineVerificationPolicy else None
+
     so_size = os.path.getsize(so_path) if so_path and os.path.exists(so_path) else None
     for name, val in new_map.items():
         if "::" not in name:
-            if val % 4 != 0:
-                fails.append(f"Method not 4-aligned: {name}=0x{val:X}")
+            if policy and policy.check_rva_alignment:
+                if val % policy.rva_alignment_bytes != 0:
+                    fails.append(f"Method not {policy.rva_alignment_bytes}-aligned: {name}=0x{val:X}")
             if so_size and val >= so_size:
                 fails.append(f"Method RVA outside binary size: {name}=0x{val:X}")
         elif name.startswith("TypeInfo::"):
-            if val % 8 != 0:
-                fails.append(f"TypeInfo not 8-aligned: {name}=0x{val:X}")
+            if policy and policy.check_typeinfo_alignment:
+                if val % policy.typeinfo_alignment_bytes != 0:
+                    fails.append(f"TypeInfo not {policy.typeinfo_alignment_bytes}-aligned: {name}=0x{val:X}")
             if so_size and val >= so_size:
                 fails.append(f"TypeInfo offset outside binary size: {name}=0x{val:X}")
         elif not name.startswith("Native::"):
-            if val >= 0x10000 or val <= 0:
-                fails.append(f"Field offset out of sanity range (0..0x10000): {name}=0x{val:X}")
+            max_field = policy.max_field_offset if policy else 0x10000
+            allow_zero = policy.allow_zero_rva if policy else False
+            if val >= max_field or (val <= 0 and not allow_zero):
+                fails.append(f"Field offset out of sanity range (0..0x{max_field:X}): {name}=0x{val:X}")
 
     # 2. Source Code Undefined Symbol Check
     if src_dir and os.path.isdir(src_dir):

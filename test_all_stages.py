@@ -22,6 +22,7 @@ STAGES = [
     ("Stage 5: Native Analysis", os.path.join(ROOT_DIR, "05_native_analysis", "test_stage.py")),
     ("Stage 6: Parse Offsets", os.path.join(ROOT_DIR, "06_parse_offsets", "test_stage.py")),
     ("Stage 7: Verify & Diff", os.path.join(ROOT_DIR, "07_verify_diff", "test_stage.py")),
+    ("Multi-Engine & Common IR", os.path.join(ROOT_DIR, "tests", "test_multi_engine.py")),
 ]
 
 

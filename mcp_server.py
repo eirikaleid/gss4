@@ -274,6 +274,31 @@ def get_stage_logs(stage_id: int, profile: str = "royale", tail_lines: int = 50)
     }
 
 
+@app.tool()
+def list_supported_engines() -> List[Dict[str, str]]:
+    """List all game engine types supported by GSS4 (Unity IL2CPP, Unity Mono, Unreal, Godot, Native)."""
+    from core.engine_provider import list_supported_engines as list_eng
+    return list_eng()
+
+
+@app.tool()
+def get_common_ir(profile: str = "royale") -> Dict[str, Any]:
+    """Retrieve normalized Common Intermediate Representation (Common IR) symbols for an application.
+
+    Args:
+        profile: Profile name (default: 'royale')
+    """
+    ir_path = os.path.join(ROOT_DIR, "build", profile, "dump", "symbols_ir.json")
+    if not os.path.exists(ir_path):
+        ir_path = os.path.join(ROOT_DIR, "build", "test", "dump", "symbols_ir.json")
+
+    if not os.path.exists(ir_path):
+        raise FileNotFoundError(f"symbols_ir.json not found for profile '{profile}'. Run pipeline first.")
+
+    with open(ir_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 # ==============================================================================
 # DUMP INSPECTION & OFFSET TOOLS
 # ==============================================================================
