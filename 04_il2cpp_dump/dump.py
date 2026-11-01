@@ -188,6 +188,9 @@ class Stage4Dump(BaseStage):
     ]
 
     def validate_inputs(self, workspace: str, config: Dict[str, Any]) -> Tuple[bool, str]:
+        adapter = config.get("adapter") or config.get("dumper_adapter")
+        if adapter == "frida":
+            return True, ""
         so_path = config.get("so_path") or os.path.join(workspace, "bin", "libil2cpp.so")
         meta_path = config.get("meta_path") or os.path.join(workspace, "bin", "global-metadata.dec.dat")
         if not os.path.exists(meta_path):
@@ -201,12 +204,40 @@ class Stage4Dump(BaseStage):
         return True, ""
 
     def execute(self, workspace: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        adapter = config.get("adapter") or config.get("dumper_adapter")
+        out_dir = config.get("dump_dir") or os.path.join(workspace, "dump")
+
+        if adapter == "frida":
+            try:
+                from adapters.frida_runtime_dumper import run_dump as run_frida_dump
+            except ImportError:
+                import importlib
+                run_frida_dump = getattr(importlib.import_module("04_il2cpp_dump.adapters.frida_runtime_dumper"), "run_dump")
+            self.logger.info(f"Stage 4 Başlatıldı: Frida Runtime Dumper Adaptörü devrede, Hedef='{out_dir}'")
+            dump_res = run_frida_dump(
+                out_dir=out_dir,
+                target=config.get("package", "com.example.game"),
+                device_id=config.get("device"),
+                mock=config.get("mock", False),
+                logger=self.logger
+            )
+            output_files = [dump_res["dump_cs"], dump_res["script_json"], dump_res["symbols_ir"]]
+            if dump_res.get("il2cpp_h"):
+                output_files.append(dump_res["il2cpp_h"])
+            return {
+                "dump_dir": out_dir,
+                "dump_cs": dump_res["dump_cs"],
+                "script_json": dump_res["script_json"],
+                "symbols_ir": dump_res.get("symbols_ir"),
+                "il2cpp_h": dump_res.get("il2cpp_h"),
+                "output_files": output_files
+            }
+
         so_path = config.get("so_path") or os.path.join(workspace, "bin", "libil2cpp.so")
         meta_path = config.get("meta_path") or os.path.join(workspace, "bin", "global-metadata.dec.dat")
         if not os.path.exists(meta_path):
             meta_path = os.path.join(workspace, "bin", "global-metadata.dat")
 
-        out_dir = config.get("dump_dir") or os.path.join(workspace, "dump")
         dumper_exe = config.get("dumper_exe") or DEFAULT_DUMPER
         log_path = os.path.join(workspace, "dump", "il2cppdumper.log")
 
@@ -244,11 +275,17 @@ class Stage4Dump(BaseStage):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Il2CppDumper headlessly.")
-    parser.add_argument("--so", required=True, help="Path to libil2cpp.so")
-    parser.add_argument("--meta", required=True, help="Path to decrypted global-metadata.dat")
+    parser = argparse.ArgumentParser(description="Run Il2CppDumper or Frida Runtime Dumper headlessly.")
+    parser.add_argument("--so", help="Path to libil2cpp.so")
+    parser.add_argument("--meta", dest="meta", help="Path to decrypted global-metadata.dat")
+    parser.add_argument("--metadata", dest="meta", help="Alias for --meta")
     parser.add_argument("--out", required=True, help="Output directory for dump files")
     parser.add_argument("--dumper", help="Optional path to Il2CppDumper.exe")
+    parser.add_argument("--adapter", default="default", choices=["default", "il2cppdumper", "frida"],
+                        help="Dumper adapter: 'default' (Il2CppDumper) or 'frida' (Runtime memory dumper)")
+    parser.add_argument("--package", default="com.example.game", help="Target package name for live Frida dump")
+    parser.add_argument("--device", help="Device ID for Frida")
+    parser.add_argument("--mock", action="store_true", help="Force mock simulation mode")
 
     args = parser.parse_args()
 
@@ -257,7 +294,11 @@ def main():
         "so_path": args.so,
         "meta_path": args.meta,
         "dump_dir": args.out,
-        "dumper_exe": args.dumper
+        "dumper_exe": args.dumper,
+        "adapter": args.adapter,
+        "package": args.package,
+        "device": args.device,
+        "mock": args.mock
     }
     res = stage.run_stage(os.path.dirname(os.path.abspath(args.out)), config)
     if res.status != "success":

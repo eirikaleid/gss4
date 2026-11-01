@@ -113,7 +113,8 @@ def diff_headers(old_map, new_map):
 
 
 def verify_and_diff(new_path, old_path=None, so_path=None, src_dir=None,
-                    profile_data=None, known_tag=None, apply_to=None, backup_dir=None):
+                    profile_data=None, known_tag=None, apply_to=None, backup_dir=None,
+                    live_assert=False, package=None, device=None, mock=False, logger=None):
     if not os.path.exists(new_path):
         raise FileNotFoundError(f"New header not found: {new_path}")
 
@@ -170,6 +171,23 @@ def verify_and_diff(new_path, old_path=None, so_path=None, src_dir=None,
     if old_path and os.path.exists(old_path):
         old_map = parse_header(old_path)
         changes, added, removed = diff_headers(old_map, new_map)
+
+    # 5. Frida Live Memory Assertions
+    live_report = None
+    if live_assert:
+        try:
+            from validators.frida_live_assert import verify_live
+        except ImportError:
+            import importlib
+            verify_live = getattr(importlib.import_module("07_verify_diff.validators.frida_live_assert"), "verify_live")
+        target_pkg = package or (profile_data.get("package") if profile_data else "com.example.game")
+        live_report = verify_live(
+            header_path=new_path,
+            package=target_pkg,
+            device=device,
+            mock=mock,
+            logger=logger
+        )
 
     if fails:
         raise ValueError(f"Verification errors:\n" + "\n".join(f"  * {f}" for f in fails))
@@ -241,7 +259,12 @@ class Stage7Verify(BaseStage):
             profile_data=profile_data,
             known_tag=known_tag,
             apply_to=apply_to,
-            backup_dir=backup_dir
+            backup_dir=backup_dir,
+            live_assert=config.get("live_assert", False),
+            package=config.get("package"),
+            device=config.get("device"),
+            mock=config.get("mock", False),
+            logger=self.logger
         )
 
         self.logger.info(f"Doğrulama başarılı: {res['constants_count']} sabit doğrulandı. Değişim sayısı: {res['changes_count']}")
@@ -265,6 +288,10 @@ def main():
     parser.add_argument("--apply-to", help="If verified, copy new header to this destination path")
     parser.add_argument("--backup-dir", default="./backups", help="Directory for previous header backups")
     parser.add_argument("--report", help="Path to write text diff report")
+    parser.add_argument("--live-assert", action="store_true", help="Perform live Frida memory assertions on RVAs & TypeInfos")
+    parser.add_argument("--mock", action="store_true", help="Use mock memory simulation for live assertions")
+    parser.add_argument("--package", default="com.example.game", help="Target package name for live Frida")
+    parser.add_argument("--device", help="Device ID for Frida")
 
     args = parser.parse_args()
 
@@ -283,7 +310,11 @@ def main():
             profile_data=profile_data,
             known_tag=args.known,
             apply_to=args.apply_to,
-            backup_dir=args.backup_dir
+            backup_dir=args.backup_dir,
+            live_assert=args.live_assert,
+            package=args.package,
+            device=args.device,
+            mock=args.mock
         )
         print(f"[OK] All {res['constants_count']} constants verified cleanly.")
         if res.get("applied_file"):

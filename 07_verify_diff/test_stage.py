@@ -45,6 +45,10 @@ namespace Offsets {
         res = verify_and_diff(self.sample_header)
         self.assertEqual(res["constants_count"], 3)
 
+    def test_live_assert_mock(self):
+        res = verify_and_diff(self.sample_header, live_assert=True, mock=True)
+        self.assertEqual(res["constants_count"], 3)
+
     def test_diff_detection(self):
         old_map = {"Player_Update": 0x1000, "Old_Method": 0x500}
         new_map = {"Player_Update": 0x1010, "New_Method": 0x600}

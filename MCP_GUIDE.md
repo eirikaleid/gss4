@@ -20,6 +20,9 @@ GSS4, yapay zeka asistanlarının (Claude, Gemini, Cursor, Antigravity vb.) doğ
 | `inspect_dump` | 70 MB'lık `dump.cs` dosyasını belleğe yüklemeden anahtar kelimeye göre arama yapar. | `{"query": "CharacterManager", "search_type": "class"}` |
 | `get_offsets` | Çıkarılan son offsetleri JSON veya C++ header olarak getirir. | `{"format": "json"}` |
 | `diff_offsets` | İki header arasındaki RVA ve alan değişimlerini diff raporu olarak sunar. | `{"old_header": "...", "new_header": "..."}` |
+| `decompile_symbol` | Hedef fonksiyonu / sembolü Ghidra veya REA ile C++/ARM64 olarak decompile eder. | `{"rva": "0x100004", "engine": "ghidra"}` |
+| `search_native_xrefs` | Native binary içinde string veya sembol referanslarını (XREF) tarar. | `{"needle": "libswappywrapper", "engine": "auto"}` |
+| `inspect_metadata_rea` | IL2CPP `global-metadata.dat` dosyasını REA motoruyla analiz eder. | `{"metadata": "build/royale/bin/global-metadata.dat"}` |
 
 ---
 

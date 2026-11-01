@@ -18,6 +18,7 @@ Bu aşama saf Python ELF64 motoruyla:
 Bu dal üzerinde şu yeni yetenekler eklenebilir:
 - **Çoklu Native Kütüphane Taraması:** Yalnızca `libunity.so` değil, `libmain.so`, `libanogs.so` ve `libGLESv2.so` gibi modülleri de eşzamanlı tarama.
 - **ARM64 Gadget / Trampoline Bulucu:** Bellek kancaları ve koruma bypass'ları için uygun ARM64 makine kodu dizilimlerini (`BLR x8`, `RET`, `LDR`) otomatik bulma.
+- **Ghidra Headless Decompiler & XREF Bridge:** `05_native_analysis/ghidra/ghidra_bridge.py` ile Ghidra headless analyzer üzerinden C++ pseudocode, string XREF ve vtable çıkarma (veya otomatik yüksek doğruluklu mock fallback).
 - **Hex Patch Üreticisi:** Vulkan Swappy'yi bellekte tek komutla kapatmak için hazır hex patch betiği oluşturma.
 - **DWARF Debug Sembolleri:** Debug sürümü kütüphanelerde sınıf ve yerel değişken hiyerarşisini doğrudan ELF'ten okuma.
 

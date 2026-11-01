@@ -30,6 +30,18 @@ class TestStage3Decrypt(unittest.TestCase):
         strats = discover_strategies()
         self.assertIn("passthrough", strats)
         self.assertIn("gups", strats)
+        self.assertIn("frida_live", strats)
+
+    def test_frida_live_mock_strategy(self):
+        out_dec = os.path.join(self.test_dir, "frida_out.dat")
+        rep = run_decryption("dummy_path_none.dat", out_dec, strategy="frida_live", mock=True)
+        self.assertEqual(rep["status"], "success")
+        self.assertEqual(rep["strategy"], "frida_live")
+        self.assertEqual(rep["mode"], "mock")
+        self.assertTrue(os.path.exists(out_dec))
+        with open(out_dec, "rb") as f:
+            magic = struct.unpack_from("<I", f.read(4), 0)[0]
+        self.assertEqual(magic, 0xFAB11BAF)
 
     def test_passthrough_decryption(self):
         out_dec = os.path.join(self.test_dir, "out.dat")

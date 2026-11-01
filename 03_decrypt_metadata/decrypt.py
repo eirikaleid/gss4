@@ -75,11 +75,12 @@ def run_decryption(
     strategy: str = "auto",
     report_path: Optional[str] = None,
     custom_words: Optional[List[str]] = None,
-    logger=None
+    logger=None,
+    **kwargs
 ) -> Dict[str, Any]:
     """Execute decryption on metadata using configured or auto-detected strategy."""
     strategies = discover_strategies(logger=logger)
-    if not os.path.exists(in_path):
+    if strategy != "frida_live" and not os.path.exists(in_path):
         raise DecryptionError(
             message=f"Girdi metadata dosyası bulunamadı: {in_path}",
             error_code="ERR_INPUT_METADATA_NOT_FOUND",
@@ -87,8 +88,10 @@ def run_decryption(
         )
 
     selected_strategy = strategy
-    with open(in_path, "rb") as f:
-        head = f.read(16)
+    head = b""
+    if os.path.exists(in_path):
+        with open(in_path, "rb") as f:
+            head = f.read(16)
 
     def log(msg, level="info"):
         if logger:
@@ -116,10 +119,19 @@ def run_decryption(
 
     log(f"Strateji koşturuluyor: '{selected_strategy}' ...")
     try:
+        import inspect
+        strat_kwargs = dict(kwargs)
         if selected_strategy == "gups":
-            report = strat_mod.run(in_path, out_path, custom_words=custom_words)
+            strat_kwargs["custom_words"] = custom_words
+
+        sig = inspect.signature(strat_mod.run)
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if has_var_keyword:
+            filtered_kwargs = strat_kwargs
         else:
-            report = strat_mod.run(in_path, out_path)
+            filtered_kwargs = {k: v for k, v in strat_kwargs.items() if k in sig.parameters}
+
+        report = strat_mod.run(in_path, out_path, **filtered_kwargs)
     except Exception as e:
         raise DecryptionError(
             message=f"'{selected_strategy}' deşifre motorunda hata oluştu: {e}",
@@ -167,6 +179,9 @@ class Stage3Decrypt(BaseStage):
     ]
 
     def validate_inputs(self, workspace: str, config: Dict[str, Any]) -> Tuple[bool, str]:
+        strat = config.get("decrypt_strategy") or config.get("strategy")
+        if strat == "frida_live":
+            return True, ""
         in_meta = config.get("metadata_in") or os.path.join(workspace, "bin", "global-metadata.dat")
         if not os.path.exists(in_meta):
             return False, f"Girdi metadata dosyası bulunamadı: {in_meta}. Önce Stage 2 çalışmalıdır."
@@ -176,7 +191,7 @@ class Stage3Decrypt(BaseStage):
         in_meta = config.get("metadata_in") or os.path.join(workspace, "bin", "global-metadata.dat")
         out_meta = config.get("metadata_out") or os.path.join(workspace, "bin", "global-metadata.dec.dat")
         report_path = config.get("report_out") or os.path.join(workspace, "gups_report.json")
-        strategy = config.get("decrypt_strategy", "auto")
+        strategy = config.get("decrypt_strategy") or config.get("strategy") or "auto"
         custom_words = config.get("custom_words")
 
         self.logger.info(f"Stage 3 Başlatıldı: Strateji='{strategy}', Girdi={in_meta}")
@@ -187,7 +202,10 @@ class Stage3Decrypt(BaseStage):
             strategy=strategy,
             report_path=report_path,
             custom_words=custom_words,
-            logger=self.logger
+            logger=self.logger,
+            package=config.get("package"),
+            device=config.get("device"),
+            mock=config.get("mock", False)
         )
 
         output_files = [os.path.abspath(out_meta)]

@@ -303,6 +303,156 @@ def get_common_ir(profile: str = "royale") -> Dict[str, Any]:
 # DUMP INSPECTION & OFFSET TOOLS
 # ==============================================================================
 
+def _resolve_target_binary(binary: Optional[str] = None, profile: str = "royale") -> str:
+    """Helper to resolve target native library path or fallback to workspace binary."""
+    if binary and os.path.exists(binary):
+        return os.path.abspath(binary)
+
+    candidates = [
+        os.path.join(ROOT_DIR, "build", profile, "bin", "libil2cpp.so"),
+        os.path.join(ROOT_DIR, "build", profile, "bin", "libunity.so"),
+        os.path.join(ROOT_DIR, "build", "test", "bin", "libil2cpp.so"),
+        os.path.join(ROOT_DIR, "build", "test", "bin", "libunity.so"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    return binary or candidates[0]
+
+
+def _resolve_target_metadata(metadata: Optional[str] = None, profile: str = "royale") -> Optional[str]:
+    """Helper to resolve global-metadata.dat path or fallback to workspace."""
+    if metadata and os.path.exists(metadata):
+        return os.path.abspath(metadata)
+
+    candidates = [
+        os.path.join(ROOT_DIR, "build", profile, "bin", "global-metadata.dec.dat"),
+        os.path.join(ROOT_DIR, "build", profile, "bin", "global-metadata.dat"),
+        os.path.join(ROOT_DIR, "build", "test", "bin", "global-metadata.dec.dat"),
+        os.path.join(ROOT_DIR, "build", "test", "bin", "global-metadata.dat"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    return metadata
+
+
+# ==============================================================================
+# STATIC REVERSE ENGINEERING & DECOMPILATION TOOLS (GHIDRA / REA)
+# ==============================================================================
+
+@app.tool()
+def decompile_symbol(
+    rva: Any,
+    binary: Optional[str] = None,
+    engine: str = "ghidra"
+) -> Dict[str, Any]:
+    """Decompile a native ARM64 / C++ function symbol or RVA using Ghidra Headless or REA.
+
+    Args:
+        rva: Function RVA (e.g. 0x100004 or '0x100004' or symbol name 'PlayerController$$Update')
+        binary: Path to native ELF library (e.g. libil2cpp.so). Auto-resolved if omitted.
+        engine: Decompilation engine - 'ghidra' (Ghidra Headless / C++ AST), 'rea' (REA engine), or 'auto'
+    """
+    bin_path = _resolve_target_binary(binary)
+    eng_lower = (engine or "ghidra").lower()
+
+    if eng_lower in ("rea", "rea-agents"):
+        from tools.rea_bridge.rea_client import REAClient
+        client = REAClient()
+        res = client.decompile(bin_path, rva)
+    elif eng_lower == "auto":
+        import importlib
+        ghidra_mod = importlib.import_module("05_native_analysis.ghidra.ghidra_bridge")
+        GhidraBridge = ghidra_mod.GhidraBridge
+        from tools.rea_bridge.rea_client import REAClient
+        gb = GhidraBridge()
+        rea = REAClient()
+        if gb.is_installed:
+            res = gb.decompile_function(bin_path, rva)
+        elif rea.is_available:
+            res = rea.decompile(bin_path, rva)
+        else:
+            res = gb.decompile_function(bin_path, rva)
+    else:  # default ghidra
+        import importlib
+        ghidra_mod = importlib.import_module("05_native_analysis.ghidra.ghidra_bridge")
+        GhidraBridge = ghidra_mod.GhidraBridge
+        gb = GhidraBridge()
+        res = gb.decompile_function(bin_path, rva)
+
+    res["target_binary"] = bin_path
+    return res
+
+
+@app.tool()
+def search_native_xrefs(
+    needle: str,
+    binary: Optional[str] = None,
+    engine: str = "auto"
+) -> List[Dict[str, Any]]:
+    """Scan native binary for cross-references (XREFs) to a string literal or symbol.
+
+    Args:
+        needle: Target string or symbol to find callers/references for (e.g. 'libswappywrapper', 'eglSwapBuffers')
+        binary: Path to native binary (defaults to libunity.so or libil2cpp.so in workspace)
+        engine: Analysis engine - 'auto', 'ghidra', or 'rea'
+    """
+    bin_path = _resolve_target_binary(binary)
+    eng_lower = (engine or "auto").lower()
+
+    if eng_lower == "rea":
+        from tools.rea_bridge.rea_client import REAClient
+        client = REAClient()
+        return client.search_xrefs(bin_path, needle)
+    elif eng_lower == "ghidra":
+        import importlib
+        ghidra_mod = importlib.import_module("05_native_analysis.ghidra.ghidra_bridge")
+        GhidraBridge = ghidra_mod.GhidraBridge
+        gb = GhidraBridge()
+        return gb.get_string_xrefs(bin_path, needle)
+    else:  # auto
+        import importlib
+        ghidra_mod = importlib.import_module("05_native_analysis.ghidra.ghidra_bridge")
+        GhidraBridge = ghidra_mod.GhidraBridge
+        gb = GhidraBridge()
+        return gb.get_string_xrefs(bin_path, needle)
+
+
+@app.tool()
+def inspect_metadata_rea(
+    binary: Optional[str] = None,
+    metadata: Optional[str] = None
+) -> Dict[str, Any]:
+    """Inspect Unity IL2CPP global-metadata.dat and correlate with native binary using the REA engine.
+
+    Args:
+        binary: Path to libil2cpp.so binary (optional, auto-resolved from build workspace)
+        metadata: Path to global-metadata.dat (optional, auto-resolved from build workspace)
+    """
+    bin_path = _resolve_target_binary(binary)
+    meta_path = _resolve_target_metadata(metadata)
+
+    if not meta_path or not os.path.exists(meta_path):
+        # Create a lightweight metadata buffer for inspection if absent
+        ws = os.path.join(ROOT_DIR, "build", "test", "bin")
+        os.makedirs(ws, exist_ok=True)
+        meta_path = os.path.join(ws, "global-metadata.dat")
+        if not os.path.exists(meta_path):
+            import struct
+            with open(meta_path, "wb") as f:
+                f.write(struct.pack("<II", 0xFAB11BAF, 29) + b"\x00" * 512)
+
+    from tools.rea_bridge.rea_client import REAClient
+    client = REAClient()
+    return client.inspect_il2cpp_metadata(
+        metadata_path=meta_path,
+        binary_path=bin_path if bin_path and os.path.exists(bin_path) else None
+    )
+
+
+# ==============================================================================
+
 @app.tool()
 def inspect_dump(
     query: str,

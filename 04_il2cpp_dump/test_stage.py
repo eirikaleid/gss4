@@ -39,6 +39,19 @@ class TestStage4Dump(unittest.TestCase):
         valid, msg = stage.validate_inputs(self.test_dir, {})
         self.assertTrue(valid)
 
+    def test_frida_adapter_lifecycle(self):
+        stage = Stage4Dump()
+        dump_dir = os.path.join(self.test_dir, "dump")
+        res = stage.run_stage(self.test_dir, config={
+            "adapter": "frida",
+            "mock": True,
+            "dump_dir": dump_dir
+        })
+        self.assertEqual(res.status, "success")
+        self.assertTrue(os.path.exists(os.path.join(dump_dir, "symbols_ir.json")))
+        self.assertTrue(os.path.exists(os.path.join(dump_dir, "dump.cs")))
+        self.assertTrue(os.path.exists(os.path.join(dump_dir, "script.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

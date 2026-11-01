@@ -266,6 +266,16 @@ class Stage5Native(BaseStage):
             self.logger.warning(f"libunity.so bulunamadı ({so_path}), boş native veri üretiliyor.")
             res = {}
 
+        if config.get("use_ghidra") or config.get("ghidra_analysis"):
+            try:
+                from .ghidra.ghidra_bridge import GhidraBridge
+                gb = GhidraBridge(logger=self.logger)
+                ghidra_rep = gb.analyze(so_path)
+                res["ghidra"] = ghidra_rep
+                self.logger.info("Ghidra analizi tamamlandı ve rapora eklendi.")
+            except Exception as ex:
+                self.logger.warning(f"Ghidra analizi çalıştırılamadı: {ex}")
+
         os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
         with open(out_json, "w", encoding="utf-8") as f:
             json.dump(res, f, indent=2)

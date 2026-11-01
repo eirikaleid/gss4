@@ -23,6 +23,8 @@ STAGES = [
     ("Stage 6: Parse Offsets", os.path.join(ROOT_DIR, "06_parse_offsets", "test_stage.py")),
     ("Stage 7: Verify & Diff", os.path.join(ROOT_DIR, "07_verify_diff", "test_stage.py")),
     ("Multi-Engine & Common IR", os.path.join(ROOT_DIR, "tests", "test_multi_engine.py")),
+    ("Ghidra & REA Static Integration", os.path.join(ROOT_DIR, "tests", "test_ghidra_rea_integration.py")),
+    ("Frida Dynamic Analysis & Live Memory", os.path.join(ROOT_DIR, "tests", "test_frida_integration.py")),
 ]
 
 
