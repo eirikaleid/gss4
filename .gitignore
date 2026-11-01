@@ -1,0 +1,30 @@
+# Build & temporary artifacts
+build/
+bin/
+apk/
+dump/
+*.apk
+*.so
+*.dat
+*.dec.dat
+
+# Logs & temp
+*.log
+il2cppdumper.log
+il2cppdumper.err.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Backups
+backups/
+.backups/
+
+# OS
+.DS_Store
+Thumbs.db

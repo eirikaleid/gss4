@@ -1,0 +1,126 @@
+{
+  "name": "royale",
+  "package": "net.f8games.royale",
+  "arch": "arm64-v8a",
+  "device": "127.0.0.1:7555",
+  "output_header": "src/core/offsets.h",
+  "header_namespace": "Offsets",
+  "preferred_namespace": "GameMain",
+  "decrypt_strategy": "gups",
+  "native_lib": "libunity.so",
+  "native_rules": {
+    "egl_swap_got": true,
+    "swappy_string": "libswappywrapper"
+  },
+  "priority_classes": {
+    "Actor": {
+      "GetPosition": 0,
+      "GetTransform": 0,
+      "get_transform": 0
+    },
+    "GameEntity": {
+      "Attack": 0,
+      "Die": 0,
+      "GetLevel": 0,
+      "GetName": 0,
+      "GetVid": 0,
+      "get_Vid": 0
+    },
+    "GamePlayer": {
+      "Attack": -1,
+      "GetName": 0,
+      "UseSkill": -1,
+      "Update": 0,
+      "PickItem": -1,
+      "SetDestPosition": -1,
+      "MoveToDirection": -1,
+      "Stop": -1
+    },
+    "CharacterManager": {
+      "CreateEntity": 3,
+      "DestroyEntity": -1,
+      "GetEntity": -1,
+      "GetAliveEntities": 0,
+      "Update": 0,
+      "get_Instance": 0
+    },
+    "GameManager": {
+      "get_Instance": 0,
+      "Start": 0
+    },
+    "GamePlayerEventHandler": {
+      "get_Instance": 0,
+      "Update": 0
+    },
+    "GroundItem": {
+      "get_Vid": 0,
+      "Init": -1,
+      "OnPick": -1
+    },
+    "GroundItemManager": {
+      "get_Instance": 0,
+      "AddItem": -1,
+      "RemoveItem": -1,
+      "GetItem": -1
+    },
+    "ActorItemPicker": {
+      "PickItem": -1,
+      "Update": 0
+    },
+    "ItemData": {
+      "GetId": -1,
+      "get_Id": -1,
+      "GetName": -1,
+      "get_Name": -1,
+      "GetGrade": -1,
+      "get_Grade": -1,
+      "GetType": -1,
+      "get_Type": -1,
+      "GetCount": -1,
+      "get_Count": -1
+    },
+    "RTSCameraTargetController": {
+      "get_Instance": 0,
+      "Update": 0
+    }
+  },
+  "keywords": [
+    "Monster", "Entity", "Character", "Creature", "Mob", "LocalPlayer", "Player", "Hero", "Avatar",
+    "Metin", "Stone", "Boss", "ItemEntity", "ItemDrop", "GroundItem", "WorldObject", "GetPosition",
+    "SetPosition", "get_position", "Transform", "Health", "Hp", "MaxHp", "CurHp", "GetHp", "Attack",
+    "Skill", "UseSkill", "CastSkill", "Damage", "Die", "Dead", "Alive", "SendPacket", "RecvPacket",
+    "Packet", "Network", "Gold", "Yang", "Inventory", "ItemId"
+  ],
+  "method_cap": 200,
+  "field_classes": [
+    "Actor", "ActorGraphic", "ActorItemPicker", "BGMetaEntity", "CharacterManager",
+    "EntityCreateData", "GameEntity", "GamePlayer", "GamePlayerEventHandler", "GroundItem",
+    "GroundItemManager", "ItemData", "LocalPlayer", "Monster", "Player",
+    "RTSCameraTargetController", "GameItem"
+  ],
+  "typeinfo_required": [
+    "Actor", "CharacterManager", "GameEntity", "GamePlayer", "GamePlayerEventHandler",
+    "GroundItemManager", "RTSCameraTargetController"
+  ],
+  "typeinfo_extra": [
+    "GameItem", "GroundItem", "MetaData.ItemData", "MetaData.MobData"
+  ],
+  "typeinfo_auto_pattern": "^GameMain\\.([A-Za-z0-9_]+(?:Manager|Controller))_TypeInfo$",
+  "known_checks": {
+    "4.9": {
+      "CharacterManager::MAIN_CAMERA": "0x50",
+      "CharacterManager::ALIVE_ENTITIES_LIST": "0x38",
+      "CharacterManager::SHOP_ENTITY_LIST": "0x60",
+      "GameEntity::ACTOR": "0x50",
+      "GameEntity::VID": "0x160",
+      "GameEntity::LEVEL": "0x11C",
+      "GameEntity::NAME": "0x120",
+      "GameEntity::RACE_TYPE": "0x58",
+      "GamePlayer_MoveToDirection": "0x51B36B0",
+      "GamePlayer_Stop": "0x51AACE4",
+      "TypeInfo::CHARACTER_MANAGER": "0xAE9ED48",
+      "Native::EGL_SWAP_GOT_FILEOFF": "0x169B2E8",
+      "Native::SWAPPY_NAME_FILEOFF": "0x163678"
+    }
+  }
+}
