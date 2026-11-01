@@ -1,9 +1,29 @@
 #!/usr/bin/env python3
 """
 06_parse_offsets/parse_offsets.py - Stage 6: Generalized Profile-Driven Offset Parser
-Extracts method RVAs, field offsets, TypeInfo pointers, and native offsets from
-Il2CppDumper output and generates clean C++, JSON, Rust, or C# code via modular generators.
-Can be executed as a CLI script, imported as Stage6Parse(BaseStage), or called via MCP.
+====================================================================================
+Ne İşe Yarar? (Purpose):
+------------------------
+Bu aşama, Il2CppDumper çıktısı olan devasa 'dump.cs' (~70 MB) ve 'script.json' dosyalarını
+kullanıcı tarafından tanımlanan profil (JSON) kurallarına göre tarayarak:
+  1. Hedef sınıfların metot Relative Virtual Address (RVA) adreslerini çıkarır.
+  2. Sınıf içi değişkenlerin (fields) bellek ofsetlerini (// 0x...) çıkarır.
+  3. libil2cpp.so ELF PT_LOAD segmentleri üzerinden TypeInfo pointer dosya ve VA ofsetlerini çözer.
+  4. 'generators/' eklentilerini kullanarak hedeflenen dillerde (C++ offsets.h, Rust offsets.rs, C# Offsets.cs, JSON)
+     temiz, tür güvenli (type-safe) ve kullanıma hazır kod dosyaları üretir.
+
+Neler Yapılabilir? (Extension Points):
+--------------------------------------
+1. Yeni Dil Jeneratörleri: 'generators/' dizinine python_gen.py, go_gen.py, ts_gen.py veya Ghidra XML üreticisi ekleme.
+2. AST Sözdizim Ayrıştırıcı: Regex yerine C# abstract syntax tree (Roslyn/Antlr) ile tam dil ayrıştırma.
+3. Obfuscation Çözücü: Karıştırılmış (obfuscated) sınıf isimlerini metot parametre sayısı ve string referansıyla eşleme.
+4. Auto Signature / AOB Scanner: Bellekte hook atılacak fonksiyonların makine kodu bayt imzalarını otomatik üretme.
+5. Vtable İndeksleyici: Sanal fonksiyonların vtable slot numaralarını otomatik hesaplama.
+
+Hata Yönetimi ve Loglama:
+-------------------------
+- dump.cs veya script.json eksikliği, sınıfların bulunamaması OffsetParseError ile yakalanır.
+- Tüm ayrıştırma ve kod üretim aşamaları 'workspace/logs/stage_06_06_parse_offsets.log' dosyasına kaydedilir.
 """
 
 import argparse
@@ -16,10 +36,16 @@ from collections import OrderedDict
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from core.stage_base import BaseStage, StageResult
+    from core.errors import OffsetParseError, StageInputError
+    from core.logger import get_stage_logger
 except ImportError:
     BaseStage = object
+    OffsetParseError = Exception
+    StageInputError = Exception
+    get_stage_logger = None
 
 from generators.cpp_gen import generate_cpp
 from generators.csharp_gen import generate_csharp
@@ -357,6 +383,19 @@ class Stage6Parse(BaseStage):
     stage_id = 6
     name = "06_parse_offsets"
     description = "Parses dump.cs and script.json into C++, JSON, Rust, and C# offset bindings."
+    purpose = "Il2CppDumper çıktılarını (dump.cs, script.json) profil kurallarına göre ayrıştırarak C++, JSON, Rust ve C# offset kodları üretir."
+    extension_points = [
+        "Yeni programlama dili jeneratörleri (Python, Go, TypeScript, Ghidra XML)",
+        "Regex yerine Roslyn/AST tabanlı dayanıklı C# sözdizim ayrıştırıcısı",
+        "İsimleri gizlenmiş/karıştırılmış (obfuscated) sınıflar için imza eşleştirici",
+        "Bellek hook'ları için AOB (Array of Bytes) opcode pattern scanner",
+        "Sanal fonksiyonlar için otomatik vtable indeksi hesaplama modülü"
+    ]
+    troubleshooting = [
+        {"error": "ERR_DUMP_CS_MISSING", "fix": "Stage 4'ün (dump) başarıyla tamamlandığını ve dump.cs dosyasını ürettiğini kontrol edin."},
+        {"error": "ERR_SCRIPT_JSON_MISSING", "fix": "Stage 4 çıktısı olan script.json dosyasının var olduğunu teyit edin."},
+        {"error": "ERR_STAGE_06_PARSE", "fix": "Profil dosyasındaki sınıf isimlerinin oyunda değişip değişmediğini kontrol edin."}
+    ]
 
     def validate_inputs(self, workspace: str, config: dict):
         dump_dir = os.path.join(workspace, "dump")
@@ -365,11 +404,11 @@ class Stage6Parse(BaseStage):
         so_path = config.get("so_path") or os.path.join(workspace, "bin", "libil2cpp.so")
 
         if not os.path.exists(dump_cs):
-            return False, f"Missing dump.cs at {dump_cs}"
+            return False, f"Missing dump.cs at {dump_cs}. Stage 4 çalışmalı."
         if not os.path.exists(script_json):
-            return False, f"Missing script.json at {script_json}"
+            return False, f"Missing script.json at {script_json}. Stage 4 çalışmalı."
         if not os.path.exists(so_path):
-            return False, f"Missing libil2cpp.so at {so_path}"
+            return False, f"Missing libil2cpp.so at {so_path}. Stage 2 çalışmalı."
         return True, ""
 
     def execute(self, workspace: str, config: dict):
@@ -384,9 +423,14 @@ class Stage6Parse(BaseStage):
             with open(profile_data, "r", encoding="utf-8") as pf:
                 profile_data = json.load(pf)
 
+        self.logger.info(f"Stage 6 Başlatıldı: dump.cs={dump_cs}, profil='{profile_data.get('name', 'default')}'")
+
         classes, bad_fields = parse_dump(dump_cs)
+        self.logger.debug(f"{len(classes)} adet C# sınıfı ayrıştırıldı.")
+
         model = Model(classes, preferred_ns=profile_data.get("preferred_namespace", "GameMain"))
         typeinfos = resolve_typeinfo(script_json, so_path, profile_data)
+        self.logger.debug(f"{len(typeinfos)} adet TypeInfo pointer çözüldü.")
 
         native_offsets = {}
         if os.path.exists(native_json):
@@ -405,22 +449,27 @@ class Stage6Parse(BaseStage):
         os.makedirs(os.path.dirname(os.path.abspath(out_header)), exist_ok=True)
         with open(out_header, "w", encoding="utf-8") as f:
             f.write(cpp_code)
+        self.logger.info(f"C++ header üretildi: {out_header}")
 
         # 2. JSON
         with open(out_json, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        self.logger.info(f"JSON verisi üretildi: {out_json}")
 
-        # 3. Rust (optional/extensible)
+        # 3. Rust (eklenti)
         with open(out_rust, "w", encoding="utf-8") as f:
             f.write(generate_rust(data))
 
-        # 4. C# (optional/extensible)
+        # 4. C# (eklenti)
         with open(out_csharp, "w", encoding="utf-8") as f:
             f.write(generate_csharp(data))
 
+        total_fields = sum(len(f) for f in data["fields"].values())
+        self.logger.info(f"Kod üretimi tamamlandı: {len(data['methods'])} metot, {total_fields} alan, {len(data['typeinfos'])} TypeInfo")
+
         return {
             "methods_count": len(data["methods"]),
-            "fields_count": sum(len(f) for f in data["fields"].values()),
+            "fields_count": total_fields,
             "typeinfos_count": len(data["typeinfos"]),
             "header_path": out_header,
             "json_path": out_json,

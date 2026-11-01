@@ -1,9 +1,29 @@
 #!/usr/bin/env python3
 """
-07_verify_diff/verify_diff.py - Stage 7: Offset Sanity Verification & Diff Gate
-Validates generated offsets against executable binaries, checks that all symbols
-used in src/ exist, generates diff reports against previous versions, and handles backups.
-Can be executed as a CLI script, imported as Stage7Verify(BaseStage), or called via MCP.
+07_verify_diff/verify_diff.py - Stage 7: Offset Sanity Verification & Diff Safety Gate
+======================================================================================
+Ne İşe Yarar? (Purpose):
+------------------------
+Bu aşama, üretilen yeni offsetlerin güvenliğini ve doğruluğunu denetleyen son güvenlik kapısıdır (safety gate):
+  1. ARM64 Komut Hizalama Testi: Metot RVA adreslerinin 4 bayta tam bölündüğünü (RVA % 4 == 0) denetler.
+  2. Bellek Sınır Testi: RVA'ların libil2cpp.so dosya boyutunu aşmadığını ve field ofsetlerinin makul aralıkta olduğunu (< 0x10000) onaylar.
+  3. Kaynak Kod Sembol Bütünlüğü: 'src/' C++ kaynak kodlarında kullanılan tüm 'Offsets::...' sembollerinin yeni header'da
+     eksiksiz var olduğunu garanti eder (0 undefined symbol).
+  4. Diff ve Kayma Analizi: Eski sürüm ile yeni sürüm arasındaki farkı hesaplar; kayma (drift) eşik değerini aşarsa uyarır.
+  5. Otomatik Yedekleme ve Uygulama: '--apply' parametresi verildiğinde mevcut header'ın tarihli yedeğini alıp yenisini hedefe yazar.
+
+Neler Yapılabilir? (Extension Points):
+--------------------------------------
+1. Canlı Bellek (Live Memory Assertion): Emülatördeki oyuna bağlanıp TypeInfo adreslerindeki Il2CppClass işaretçilerini canlı teyit etme.
+2. Otomatik Clang / GCC Derleme Testi: Yeni header ile src/ kodlarını arka planda derleyip sözdizim hatası arama.
+3. CI/CD Entegrasyonu: Değişen ofset tablosunu GitHub Pull Request veya Discord/Telegram bildirim webhook'u olarak gönderme.
+4. Snapshot & Rollback Yöneticisi: Oyun çökerse tek tuşla önceki çalışan ofsetlere ve APK sürümüne geri dönme.
+5. Regresyon / Anomali Dedektörü: Önceki 10 sürümün ofset geçmişini saklayıp istatistiksel anomali analizi yapma.
+
+Hata Yönetimi ve Loglama:
+-------------------------
+- Hizalama hatası, tanımsız sembol veya aşırı kayma VerificationGateError ile yakalanır.
+- Rapor 'verify_report.txt' dosyasına ve 'workspace/logs/stage_07_07_verify_diff.log' içine yazılır.
 """
 
 import argparse
@@ -13,12 +33,18 @@ import shutil
 import struct
 import sys
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from core.stage_base import BaseStage, StageResult
+    from core.errors import VerificationGateError, StageInputError
+    from core.logger import get_stage_logger
 except ImportError:
     BaseStage = object
+    VerificationGateError = Exception
+    StageInputError = Exception
+    get_stage_logger = None
 
 CONST_RE = re.compile(r"constexpr\s+(?:uintptr_t|int|unsigned|uint32_t|uint64_t|int32_t)\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;")
 NS_OPEN_RE = re.compile(r"^\s*namespace\s+(\w+)\s*\{")
@@ -162,11 +188,24 @@ class Stage7Verify(BaseStage):
     stage_id = 7
     name = "07_verify_diff"
     description = "Sanity verification, symbol integrity check against src/, and diff report."
+    purpose = "ARM64 komut hizalamasını, bellek sınırlarını, kaynak kod sembol bütünlüğünü ve sürüm diff raporunu denetler; onaylıysa hedef projeye uygular."
+    extension_points = [
+        "Canlı emülatör belleğinden (/proc/pid/mem) TypeInfo Il2CppClass işaretçisi doğrulama",
+        "Yeni header ile src/ kaynak kodlarını test amaçlı derleyen Clang/GCC entegrasyonu",
+        "Değişiklikleri Markdown tablosu olarak GitHub PR veya bildirim kanalına gönderen webhook",
+        "Hata durumunda önceki çalışan sürüme otomatik geri dönen Snapshot & Rollback mekanizması",
+        "Geçmiş sürümlerin ofset sapmalarını modelleyen istatistiksel anomali dedektörü"
+    ]
+    troubleshooting = [
+        {"error": "ERR_NEW_HEADER_MISSING", "fix": "Stage 6'nın başarıyla tamamlandığını ve offsets.h ürettiğini kontrol edin."},
+        {"error": "ERR_STAGE_07_VERIFY", "fix": "Diff raporundaki (verify_report.txt) tanımsız sembolleri ve aşırı kaymaları inceleyin."},
+        {"error": "ERR_UNALIGNED_INSTRUCTION", "fix": "RVA adresinin 4 bayta tam bölündüğünü teyit edin."}
+    ]
 
     def validate_inputs(self, workspace: str, config: dict):
         new_header = config.get("new_header") or os.path.join(workspace, "offsets.h")
         if not os.path.exists(new_header):
-            return False, f"Missing header to verify at {new_header}"
+            return False, f"Doğrulanacak başlık dosyası bulunamadı: {new_header}. Stage 6 çalışmalı."
         return True, ""
 
     def execute(self, workspace: str, config: dict):
@@ -179,6 +218,8 @@ class Stage7Verify(BaseStage):
         apply_to = config.get("apply_to")
         backup_dir = config.get("backup_dir") or os.path.join(workspace, "backups")
 
+        self.logger.info(f"Stage 7 Başlatıldı: Doğrulanıyor={new_header}")
+
         res = verify_and_diff(
             new_path=new_header,
             old_path=old_header,
@@ -189,6 +230,11 @@ class Stage7Verify(BaseStage):
             apply_to=apply_to,
             backup_dir=backup_dir
         )
+
+        self.logger.info(f"Doğrulama başarılı: {res['constants_count']} sabit doğrulandı. Değişim sayısı: {res['changes_count']}")
+        if res.get("applied_file"):
+            self.logger.info(f"Hedefe uygulandı: {res['applied_file']}")
+
         return res
 
     def validate_outputs(self, workspace: str, config: dict):

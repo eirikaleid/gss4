@@ -199,6 +199,81 @@ def list_stage_plugins(stage_id: int) -> List[str]:
         return [f"Stage {stage_id} uses core modular architecture."]
 
 
+@app.tool()
+def get_stage_info(stage_id: int) -> Dict[str, Any]:
+    """Get full documentation, purpose, extension points, and troubleshooting guide for a specific stage.
+
+    Args:
+        stage_id: Stage number (1 to 7)
+    """
+    stage_modules = {
+        1: ("01_apk_pull.pull", "Stage1Pull"),
+        2: ("02_extract.extract", "Stage2Extract"),
+        3: ("03_decrypt_metadata.decrypt", "Stage3Decrypt"),
+        4: ("04_il2cpp_dump.dump", "Stage4Dump"),
+        5: ("05_native_analysis.analyze_native", "Stage5Native"),
+        6: ("06_parse_offsets.parse_offsets", "Stage6Parse"),
+        7: ("07_verify_diff.verify_diff", "Stage7Verify"),
+    }
+    if stage_id not in stage_modules:
+        raise ValueError(f"Invalid stage_id: {stage_id}. Must be 1..7.")
+
+    mod_name, cls_name = stage_modules[stage_id]
+    import importlib
+    mod = importlib.import_module(mod_name)
+    stage_cls = getattr(mod, cls_name)
+    stage_inst = stage_cls()
+    info = stage_inst.get_info()
+
+    # Add plugin details
+    if stage_id in (3, 6):
+        info["plugins"] = list_stage_plugins(stage_id)
+
+    return info
+
+
+@app.tool()
+def get_stage_logs(stage_id: int, profile: str = "royale", tail_lines: int = 50) -> Dict[str, Any]:
+    """Retrieve the latest persistent log output for a specific stage.
+
+    Args:
+        stage_id: Stage number (1 to 7)
+        profile: Application profile name (to locate workspace)
+        tail_lines: Number of trailing log lines to read (default: 50)
+    """
+    ws = os.path.join(ROOT_DIR, "build", profile)
+    logs_dir = os.path.join(ws, "logs")
+
+    if not os.path.exists(logs_dir):
+        return {"status": "no_logs", "message": f"Logs directory not found at {logs_dir}. Stage has not run yet."}
+
+    # Find matching stage log
+    stage_prefix = f"stage_{stage_id:02d}_"
+    target_log = None
+    for fn in os.listdir(logs_dir):
+        if fn.startswith(stage_prefix) and fn.endswith(".log"):
+            target_log = os.path.join(logs_dir, fn)
+            break
+
+    if not target_log or not os.path.exists(target_log):
+        # Fallback to pipeline.log
+        pipeline_log = os.path.join(logs_dir, "pipeline.log")
+        if os.path.exists(pipeline_log):
+            target_log = pipeline_log
+        else:
+            return {"status": "not_found", "message": f"No log file found matching {stage_prefix}* in {logs_dir}"}
+
+    with open(target_log, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+
+    return {
+        "status": "success",
+        "log_file": os.path.basename(target_log),
+        "total_lines": len(lines),
+        "lines": [l.rstrip() for l in lines[-tail_lines:]]
+    }
+
+
 # ==============================================================================
 # DUMP INSPECTION & OFFSET TOOLS
 # ==============================================================================

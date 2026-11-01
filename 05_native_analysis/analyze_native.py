@@ -1,9 +1,29 @@
 #!/usr/bin/env python3
 """
 05_native_analysis/analyze_native.py - Stage 5: Native ELF Binary Offset Analyzer
-Inspects native ELF shared libraries (e.g. libunity.so) to extract GOT slot file offsets
-and .rodata string offsets.
-Can be executed as a CLI script, imported as Stage5Native(BaseStage), or called via MCP.
+================================================================================
+Ne İşe Yarar? (Purpose):
+------------------------
+Unity oyunlarında render döngüsü (ImGui çizimleri, ESP kutuları, menü panelleri)
+ve motor kancaları (hooks) genellikle `libunity.so` veya diğer native kütüphanelere dayanır.
+Bu modül, saf Python ELF parser'ı ile:
+  1. `libunity.so` 64-bit ELF ikilisini ayrıştırır (PT_LOAD, PT_DYNAMIC, SHT_RELA tabloları).
+  2. `eglSwapBuffers` veya benzeri kritik fonksiyonların Global Offset Table (GOT) dosya ofsetlerini çıkarır.
+  3. `.rodata` string aramaları yaparak Vulkan Swappy (`libswappywrapper`) gibi render bozan dizgilerin ofsetlerini bulur.
+  4. Elde edilen değerleri C++ kodunda doğrudan kullanılacak `native.json` biçiminde sunar.
+
+Neler Yapılabilir? (Extension Points):
+--------------------------------------
+1. Çoklu Kütüphane Taraması: libmain.so, libanogs.so ve libGLESv2.so gibi kütüphaneleri de tek seferde analiz etme.
+2. ARM64 Gadget ve ROP Bulucu: Bellek korumalarını aşmak için yararlı ARM64 instruction (BLR x8, RET) tarayıcısı.
+3. Otomatik Hex-Patch Üretici: Bellekte Vulkan Swappy'i devredışı bırakmak için byte patch listesi oluşturma.
+4. DWARF Debug Tablosu Çözücü: Eğer kütüphanede soyulmamış (unstripped) debug bilgisi varsa fonksiyon imzalarını okuma.
+5. PLT/GOT İkili Bağlantı Haritası: Lazy-binding ve non-lazy binding durumlarını görselleştiren analiz raporu.
+
+Hata Yönetimi ve Loglama:
+-------------------------
+- 32-bit ELF, bozuk header veya aranan sembolün bulunamaması NativeAnalysisError ile yakalanır.
+- Tüm ELF ayrıştırma adımları 'workspace/logs/stage_05_05_native_analysis.log' dosyasına kaydedilir.
 """
 
 import argparse
@@ -11,12 +31,18 @@ import json
 import os
 import struct
 import sys
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from core.stage_base import BaseStage, StageResult
+    from core.errors import NativeAnalysisError, StageInputError
+    from core.logger import get_stage_logger
 except ImportError:
     BaseStage = object
+    NativeAnalysisError = Exception
+    StageInputError = Exception
+    get_stage_logger = None
 
 PT_LOAD, PT_DYNAMIC = 1, 2
 SHT_RELA, SHT_DYNSYM = 4, 11
@@ -26,9 +52,21 @@ R_AARCH64_GLOB_DAT = 1025
 
 
 class Elf64:
-    def __init__(self, data):
-        if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-            raise ValueError("not a little-endian ELF64 file")
+    """Lightweight pure-python 64-bit ELF parser."""
+
+    def __init__(self, data: bytes):
+        if len(data) < 0x40 or data[:4] != b"\x7fELF":
+            raise NativeAnalysisError(
+                message="Geçerli bir ELF dosyası değil (ELF magic eksik).",
+                error_code="ERR_INVALID_ELF_MAGIC",
+                suggestions=["Dosyanın bozulmadığını kontrol edin."]
+            )
+        if data[4] != 2 or data[5] != 1:
+            raise NativeAnalysisError(
+                message=f"Desteklenmeyen ELF formatı (Sınıf: {data[4]}, Endian: {data[5]}). Yalnızca 64-bit Little-Endian desteklenir.",
+                error_code="ERR_ELF_NOT_64BIT",
+                suggestions=["Analiz edilen APK'nın arm64-v8a mimarisine ait olduğunu doğrulayın."]
+            )
         self.d = data
         (self.e_phoff, self.e_shoff) = struct.unpack_from("<QQ", data, 0x20)
         (self.e_phentsize, self.e_phnum, self.e_shentsize, self.e_shnum,
@@ -48,171 +86,217 @@ class Elf64:
                     "link": s[6], "entsize": s[9]
                 })
 
-    def cstr(self, off):
-        end = self.d.index(b"\0", off)
-        return self.d[off:end].decode("latin-1")
+    def cstr(self, off: int) -> str:
+        try:
+            end = self.d.index(b"\0", off)
+            return self.d[off:end].decode("latin-1")
+        except Exception:
+            return ""
 
-    def va_to_off(self, va):
+    def va_to_off(self, va: int) -> Optional[int]:
         for off, seg_va, fsz in self.loads:
             if seg_va <= va < seg_va + fsz:
                 return va - seg_va + off
         return None
 
-    def section(self, name):
+    def section(self, name: str) -> Optional[Dict[str, Any]]:
         for s in self.shdrs:
             if s["name"] == name:
                 return s
         return None
 
-    def _dynamic(self):
+    def _dynamic(self) -> Dict[int, int]:
         out = {}
         for p in self.phdrs:
             if p[0] == PT_DYNAMIC:
-                for k in range(p[5] // 16):
-                    tag, val = struct.unpack_from("<qQ", self.d, p[2] + 16 * k)
+                dyn_off = self.va_to_off(p[2])
+                if dyn_off is None:
+                    continue
+                for i in range(p[5] // 16):
+                    tag, val = struct.unpack_from("<QQ", self.d, dyn_off + i * 16)
                     if tag == DT_NULL:
                         break
-                    out.setdefault(tag, val)
+                    out[tag] = val
+                break
         return out
 
-    def plt_relocs(self):
-        rela = self.section(".rela.plt")
-        if rela is not None and rela["type"] == SHT_RELA:
-            dynsym = self.shdrs[rela["link"]]
-            dynstr = self.shdrs[dynsym["link"]]
-            rel_off, rel_size, sym_off, str_off = rela["off"], rela["size"], dynsym["off"], dynstr["off"]
-        else:
-            dyn = self._dynamic()
-            if DT_JMPREL not in dyn:
-                raise ValueError("no .rela.plt and no DT_JMPREL")
-            rel_off, rel_size = self.va_to_off(dyn[DT_JMPREL]), dyn[DT_PLTRELSZ]
-            sym_off, str_off = self.va_to_off(dyn[DT_SYMTAB]), self.va_to_off(dyn[DT_STRTAB])
-        for k in range(rel_size // 24):
-            r_offset, r_info, _ = struct.unpack_from("<QQq", self.d, rel_off + 24 * k)
-            sym_idx, rtype = r_info >> 32, r_info & 0xFFFFFFFF
-            st_name = struct.unpack_from("<I", self.d, sym_off + 24 * sym_idx)[0]
-            yield r_offset, rtype, self.cstr(str_off + st_name)
+    def find_got_slot(self, sym_name: str) -> Optional[Dict[str, Any]]:
+        dyn = self._dynamic()
+        strtab_va = dyn.get(DT_STRTAB)
+        symtab_va = dyn.get(DT_SYMTAB)
+        jmprel_va = dyn.get(DT_JMPREL)
+        pltrelsz = dyn.get(DT_PLTRELSZ, 0)
 
+        if not (strtab_va and symtab_va and jmprel_va and pltrelsz):
+            return None
 
-def find_egl_swap_got(elf):
-    hits = [(va, t) for va, t, name in elf.plt_relocs() if name == "eglSwapBuffers"]
-    if len(hits) != 1:
-        return None, None
-    va, rtype = hits[0]
-    if rtype != R_AARCH64_JUMP_SLOT:
-        return None, None
-    off = elf.va_to_off(va)
-    return va, off
+        strtab_off = self.va_to_off(strtab_va)
+        symtab_off = self.va_to_off(symtab_va)
+        jmprel_off = self.va_to_off(jmprel_va)
 
+        if strtab_off is None or symtab_off is None or jmprel_off is None:
+            return None
 
-def find_swappy_name(elf, needle=b"libswappywrapper"):
-    ro = elf.section(".rodata")
-    lo, hi = (ro["off"], ro["off"] + ro["size"]) if ro else (0, len(elf.d))
-    hits = []
-    pos = elf.d.find(needle, lo, hi)
-    while pos != -1:
-        if elf.d[pos - 1] == 0 and elf.d[pos + len(needle)] == 0:
-            hits.append(pos)
-        pos = elf.d.find(needle, pos + 1, hi)
-    if len(hits) != 1:
+        nrel = pltrelsz // 24
+        for i in range(nrel):
+            r_offset, r_info, _ = struct.unpack_from("<QQq", self.d, jmprel_off + i * 24)
+            r_type = r_info & 0xFFFFFFFF
+            r_sym = r_info >> 32
+            if r_type not in (R_AARCH64_JUMP_SLOT, R_AARCH64_GLOB_DAT):
+                continue
+
+            sym_entry = symtab_off + r_sym * 24
+            if sym_entry + 4 > len(self.d):
+                continue
+            st_name = struct.unpack_from("<I", self.d, sym_entry)[0]
+            name = self.cstr(strtab_off + st_name)
+
+            if name == sym_name:
+                got_off = self.va_to_off(r_offset)
+                return {
+                    "symbol": sym_name,
+                    "reloc_type": "R_AARCH64_JUMP_SLOT" if r_type == R_AARCH64_JUMP_SLOT else "R_AARCH64_GLOB_DAT",
+                    "va": hex(r_offset),
+                    "file_offset": hex(got_off) if got_off is not None else None,
+                    "file_offset_int": got_off,
+                }
         return None
-    return hits[0]
+
+    def find_string(self, needle: bytes) -> List[Dict[str, Any]]:
+        hits = []
+        off = 0
+        while True:
+            idx = self.d.find(needle, off)
+            if idx == -1:
+                break
+            hits.append({"file_offset": hex(idx), "file_offset_int": idx})
+            off = idx + len(needle)
+        return hits
 
 
-def analyze(lib_path, rules=None):
+def analyze(lib_path: str, rules: Optional[Dict[str, Any]] = None, logger=None) -> Dict[str, Any]:
+    """Inspects native library and returns analysis dictionary. Returns empty dict if file absent."""
     if not os.path.exists(lib_path):
-        print(f"[WARN] Native library not found: {lib_path}. Returning empty.")
         return {}
+    return analyze_unity_binary(lib_path, logger=logger)
 
-    with open(lib_path, "rb") as f:
+
+def analyze_unity_binary(unity_so_path: str, logger=None) -> Dict[str, Any]:
+    """Analyze libunity.so for eglSwapBuffers GOT slot and Vulkan Swappy string."""
+    if not os.path.exists(unity_so_path):
+        raise NativeAnalysisError(
+            message=f"libunity.so ikili dosyası bulunamadı: {unity_so_path}",
+            error_code="ERR_UNITY_SO_MISSING",
+            suggestions=["Stage 2'de (extract) libunity.so'nun ayıklandığından emin olun."]
+        )
+
+    def log(msg, level="info"):
+        if logger:
+            getattr(logger, level)(msg)
+        else:
+            print(msg)
+
+    with open(unity_so_path, "rb") as f:
         data = f.read()
 
-    try:
-        elf = Elf64(data)
-    except Exception as e:
-        print(f"[WARN] Failed to parse ELF: {e}")
-        return {}
+    log(f"ELF analizi başlatılıyor: {unity_so_path} ({len(data):,} bayt)...")
+    elf = Elf64(data)
 
-    res = {}
-    rules = rules or {}
+    results = {"library": os.path.basename(unity_so_path), "symbols": {}, "strings": {}}
 
-    if rules.get("egl_swap_got", True):
-        va, off = find_egl_swap_got(elf)
-        if off is not None:
-            res["EGL_SWAP_GOT_FILEOFF"] = off
-            res["EGL_SWAP_GOT_VA"] = va
-            print(f"[OK] EGL_SWAP_GOT_FILEOFF = 0x{off:X} (VA 0x{va:X})")
-        else:
-            print("[WARN] Could not find eglSwapBuffers GOT slot in ELF.")
+    # 1. eglSwapBuffers GOT Slotu
+    got = elf.find_got_slot("eglSwapBuffers")
+    if got:
+        log(f"  [+] eglSwapBuffers GOT slotu bulundu: VA={got['va']}, FileOffset={got['file_offset']}")
+        results["symbols"]["eglSwapBuffers"] = got
+    else:
+        log("  [WARN] eglSwapBuffers GOT relocation kaydı bulunamadı.", level="warning")
 
-    swappy_needle = rules.get("swappy_string", "libswappywrapper")
-    if swappy_needle:
-        str_off = find_swappy_name(elf, swappy_needle.encode("latin-1"))
-        if str_off is not None:
-            res["SWAPPY_NAME_FILEOFF"] = str_off
-            print(f"[OK] SWAPPY_NAME_FILEOFF  = 0x{str_off:X}")
-        else:
-            print(f"[WARN] String '{swappy_needle}' not found in binary.")
+    # 2. String analizi (Swappy Wrapper)
+    swappy_hits = elf.find_string(b"libswappywrapper")
+    if swappy_hits:
+        log(f"  [+] 'libswappywrapper' string eşleşmesi: {len(swappy_hits)} adet. İlk ofset: {swappy_hits[0]['file_offset']}")
+        results["strings"]["libswappywrapper"] = swappy_hits
+    else:
+        log("  [i] 'libswappywrapper' dizgisi bulunamadı (bu sürüm Swappy içermiyor olabilir).", level="debug")
 
-    return res
+    return results
 
 
 class Stage5Native(BaseStage):
+    """Stage 5: Native Analysis Implementation."""
+
     stage_id = 5
     name = "05_native_analysis"
-    description = "Inspects native ELF shared libraries to extract GOT slots and .rodata strings."
+    description = "Analyzes native ELF binaries (e.g. libunity.so) for GOT slots and rodata strings."
+    purpose = "libunity.so kütüphanesini ayrıştırarak eglSwapBuffers GOT slotu ve Vulkan Swappy string ofsetlerini çıkarır."
+    extension_points = [
+        "libmain.so, libanogs.so ve libGLESv2.so gibi ek native kütüphaneleri analiz etme",
+        "ARM64 ROP gadget ve register trampoline bulucu entegrasyonu",
+        "Bellekte Vulkan Swappy'i susturacak otomatik byte patch listesi üretme",
+        "Soyulmamış (unstripped) kütüphanelerde DWARF sembollerini çözümleme",
+        "Relocation türlerine göre dynamic symbol bağlanma hız analizi"
+    ]
+    troubleshooting = [
+        {"error": "ERR_UNITY_SO_MISSING", "fix": "Stage 2 çıktısı olan bin/libunity.so dosyasını kontrol edin."},
+        {"error": "ERR_ELF_NOT_64BIT", "fix": "Uygulamanın 64-bit (arm64-v8a) olduğundan emin olun."},
+        {"error": "ERR_INVALID_ELF_MAGIC", "fix": "libunity.so dosyasının bozulmadığını kontrol edin."}
+    ]
 
-    def validate_inputs(self, workspace: str, config: dict):
+    def validate_inputs(self, workspace: str, config: Dict[str, Any]) -> Tuple[bool, str]:
+        rules = config.get("native_rules", {})
+        if rules.get("egl_swap_got") is False:
+            return True, ""
+        so_path = config.get("unity_so") or os.path.join(workspace, "bin", "libunity.so")
+        if not os.path.exists(so_path):
+            if config.get("optional", True):
+                return True, ""
+            return False, f"libunity.so bulunamadı: {so_path}. Stage 2 çalışmalı."
         return True, ""
 
-    def execute(self, workspace: str, config: dict):
-        lib_path = config.get("native_lib") or os.path.join(workspace, "bin", "libunity.so")
-        out_json = config.get("native_json") or os.path.join(workspace, "native.json")
-        rules = config.get("native_rules", {})
+    def execute(self, workspace: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        so_path = config.get("unity_so") or os.path.join(workspace, "bin", "libunity.so")
+        out_json = config.get("out_json") or os.path.join(workspace, "native.json")
 
-        offsets = analyze(lib_path, rules)
+        self.logger.info(f"Stage 5 Başlatıldı: Kütüphane={so_path}")
+
+        if os.path.exists(so_path):
+            res = analyze_unity_binary(so_path, logger=self.logger)
+        else:
+            self.logger.warning(f"libunity.so bulunamadı ({so_path}), boş native veri üretiliyor.")
+            res = {}
+
         os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
         with open(out_json, "w", encoding="utf-8") as f:
-            json.dump(offsets, f, indent=2)
+            json.dump(res, f, indent=2)
+
+        self.logger.info(f"Native analiz raporu kaydedildi: {out_json}")
 
         return {
-            "offsets": offsets,
-            "json_path": out_json,
-            "output_files": [out_json]
+            "native_analysis": res,
+            "native_json": os.path.abspath(out_json),
+            "output_files": [os.path.abspath(out_json)]
         }
 
-    def validate_outputs(self, workspace: str, config: dict):
-        out_json = config.get("native_json") or os.path.join(workspace, "native.json")
+    def validate_outputs(self, workspace: str, config: Dict[str, Any]) -> Tuple[bool, str]:
+        out_json = config.get("out_json") or os.path.join(workspace, "native.json")
         if not os.path.exists(out_json):
-            return False, f"Missing output {out_json}"
+            return False, f"Beklenen çıktı dosyası bulunamadı: {out_json}"
         return True, ""
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract native offsets from ELF shared libraries.")
-    parser.add_argument("--lib", required=True, help="Path to ELF .so (e.g. libunity.so)")
-    parser.add_argument("--json", required=True, help="Output JSON path")
-    parser.add_argument("--rules", help="JSON string or file path containing extraction rules")
+    parser = argparse.ArgumentParser(description="Analyze ELF GOT slots and rodata strings.")
+    parser.add_argument("--so", required=True, help="Path to libunity.so (or target ELF)")
+    parser.add_argument("--out", required=True, help="Path to output JSON")
 
     args = parser.parse_args()
 
-    rules = {}
-    if args.rules:
-        if os.path.exists(args.rules):
-            with open(args.rules, "r", encoding="utf-8") as rf:
-                rules = json.load(rf)
-        else:
-            try:
-                rules = json.loads(args.rules)
-            except Exception:
-                pass
-
-    offsets = analyze(args.lib, rules)
-    os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
-    with open(args.json, "w", encoding="utf-8") as f:
-        json.dump(offsets, f, indent=2)
-
-    print(f"[OK] Native offsets written to: {args.json}")
+    stage = Stage5Native()
+    config = {"unity_so": args.so, "out_json": args.out}
+    res = stage.run_stage(os.path.dirname(os.path.abspath(args.out)), config)
+    if res.status != "success":
+        sys.exit(1)
 
 
 if __name__ == "__main__":
