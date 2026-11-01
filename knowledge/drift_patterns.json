@@ -1,0 +1,8 @@
+{
+  "version": "1.0.0",
+  "packages": {
+    "net.f8games.royale": {
+      "patterns": []
+    }
+  }
+}

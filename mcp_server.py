@@ -558,6 +558,95 @@ def diff_offsets(old_header: Optional[str] = None, new_header: Optional[str] = N
 
 
 # ==============================================================================
+# SELF-LEARNING & PERSISTENT KNOWLEDGE BASE TOOLS
+# ==============================================================================
+
+@app.tool()
+def get_learned_knowledge(
+    query: Optional[str] = None,
+    category: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieve learned insights, proven decryption strategies, alias mappings, and drift patterns.
+
+    Args:
+        query: Optional search keyword to filter lessons or symbols
+        category: Optional category filter - 'strategies', 'aliases', 'drift', 'lessons'
+    """
+    from core.learning import get_learning_engine
+    engine = get_learning_engine()
+    return engine.get_learned_knowledge(query=query, category=category)
+
+
+@app.tool()
+def record_learned_lesson(
+    topic: str,
+    problem: str,
+    solution: str,
+    context: Optional[Dict[str, Any]] = None,
+    stage_id: Optional[int] = None,
+    error_code: Optional[str] = None
+) -> Dict[str, Any]:
+    """Record an external or AI agent insight, diagnostic resolution, or work-around into persistent memory.
+
+    Args:
+        topic: Subject or category (e.g. 'anti-cheat', 'vtable_shift', 'xor_ramp')
+        problem: Description of error or failure encountered
+        solution: Actionable resolution or work-around applied
+        context: Optional extra metadata dictionary
+        stage_id: Optional stage ID (1..7) this lesson applies to
+        error_code: Optional error code (e.g. 'ERR_DECRYPTION_FAILED')
+    """
+    from core.learning import get_learning_engine
+    engine = get_learning_engine()
+    lesson_id = engine.record_lesson(
+        topic=topic,
+        problem=problem,
+        solution=solution,
+        stage_id=stage_id,
+        error_code=error_code,
+        context=context or {}
+    )
+    return {
+        "status": "success",
+        "lesson_id": lesson_id,
+        "message": f"Lesson successfully recorded in persistent knowledge base: {lesson_id}"
+    }
+
+
+@app.tool()
+def suggest_adaptation(
+    package: Optional[str] = None,
+    error_code: Optional[str] = None,
+    stage_id: Optional[int] = None
+) -> Dict[str, Any]:
+    """Provide adaptive recovery solutions and learned fixes when a pipeline stage fails or offsets drift.
+
+    Args:
+        package: Target application package name (e.g. 'net.f8games.royale')
+        error_code: Specific error code encountered (e.g. 'ERR_DECRYPTION_FAILED', 'ERR_STAGE_07_VERIFY')
+        stage_id: Optional pipeline stage number (1..7)
+    """
+    from core.learning import get_learning_engine
+    engine = get_learning_engine()
+    solutions = engine.suggest_recovery(
+        stage_id=stage_id,
+        error_code=error_code,
+        context={"package": package}
+    )
+    aliases = engine.get_all_aliases(package) if package else {}
+    drift = engine.get_drift_history(package) if package else []
+
+    return {
+        "package": package,
+        "error_code": error_code,
+        "stage_id": stage_id,
+        "recommended_solutions": solutions,
+        "known_aliases_count": len(aliases),
+        "drift_history_records": len(drift)
+    }
+
+
+# ==============================================================================
 # RESOURCES & PROMPTS
 # ==============================================================================
 

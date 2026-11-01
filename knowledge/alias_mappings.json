@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "packages": {
+    "net.f8games.royale": {
+      "aliases": {
+        "CharacterManager": {
+          "canonical_name": "CharacterManager",
+          "alias_name": "CharacterManager",
+          "package": "net.f8games.royale",
+          "kind": "class",
+          "confidence": 1.0,
+          "evidence": [
+            "field_count=18",
+            "canonical_symbol_match"
+          ],
+          "discovered_version": "4.9",
+          "last_verified_time": 1793566958.025902,
+          "metadata": {}
+        }
+      }
+    }
+  }
+}

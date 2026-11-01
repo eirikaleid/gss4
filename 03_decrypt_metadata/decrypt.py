@@ -99,15 +99,35 @@ def run_decryption(
         else:
             print(msg)
 
-    # Otomatik algılama: Düz metin mi şifreli mi?
+    # Initialize learning engine and extract fingerprint
+    le = None
+    fp = None
+    try:
+        from core.learning import get_learning_engine
+        le = get_learning_engine()
+        if os.path.exists(in_path):
+            fp = le.extract_fingerprint(in_path, package=kwargs.get("package"))
+    except Exception as le_init_err:
+        if logger:
+            logger.debug(f"Learning engine init note: {le_init_err}")
+        le = None
+
+    # Otomatik algılama: Önce Öğrenme Motoru önerisi, yoksa başlık/entropi analizi
     if selected_strategy == "auto":
-        passthrough_mod = strategies.get("passthrough")
-        if passthrough_mod and hasattr(passthrough_mod, "is_plaintext") and passthrough_mod.is_plaintext(head):
-            log("Metadata standart IL2CPP düz metin (şifresiz) -> 'passthrough' stratejisi seçildi.")
-            selected_strategy = "passthrough"
+        suggested = None
+        if le and fp:
+            suggested = le.suggest_strategy(fp, available_strategies=list(strategies.keys()))
+        if suggested and suggested in strategies:
+            log(f"Öğrenme Motoru (Knowledge Base): '{suggested}' stratejisi parmak izine göre önceliklendirildi.")
+            selected_strategy = suggested
         else:
-            log("Metadata başlığı şifreli/özel formatta -> 'gups' stratejisi seçildi.")
-            selected_strategy = "gups"
+            passthrough_mod = strategies.get("passthrough")
+            if passthrough_mod and hasattr(passthrough_mod, "is_plaintext") and passthrough_mod.is_plaintext(head):
+                log("Metadata standart IL2CPP düz metin (şifresiz) -> 'passthrough' stratejisi seçildi.")
+                selected_strategy = "passthrough"
+            else:
+                log("Metadata başlığı şifreli/özel formatta -> 'gups' stratejisi seçildi.")
+                selected_strategy = "gups"
 
     strat_mod = strategies.get(selected_strategy)
     if not strat_mod:
@@ -132,7 +152,29 @@ def run_decryption(
             filtered_kwargs = {k: v for k, v in strat_kwargs.items() if k in sig.parameters}
 
         report = strat_mod.run(in_path, out_path, **filtered_kwargs)
+
+        # Başarılı deşifre stratejisini parmak iziyle eşleyip kalıcı hafızaya kaydet
+        if le and fp:
+            try:
+                le.record_strategy_success(
+                    fingerprint=fp,
+                    strategy=selected_strategy,
+                    details={
+                        "package": kwargs.get("package"),
+                        "output_size": os.path.getsize(out_path) if os.path.exists(out_path) else 0,
+                        "report_summary": report.get("status") if isinstance(report, dict) else "ok"
+                    }
+                )
+                log(f"Öğrenme Motoru: Başarılı '{selected_strategy}' stratejisi parmak izine işlendi.")
+            except Exception as rec_err:
+                log(f"Öğrenme motoru kaydı uyarısı: {rec_err}", level="debug")
+
     except Exception as e:
+        if le and fp:
+            try:
+                le.record_strategy_failure(fp, selected_strategy, str(e))
+            except Exception:
+                pass
         raise DecryptionError(
             message=f"'{selected_strategy}' deşifre motorunda hata oluştu: {e}",
             error_code="ERR_DECRYPTION_FAILED",

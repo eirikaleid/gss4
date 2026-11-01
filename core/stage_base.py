@@ -72,6 +72,11 @@ class BaseStage(abc.ABC):
         self._post_hooks: List[Callable[[StageResult], None]] = []
         self._error_hooks: List[Callable[[Exception, Dict[str, Any]], None]] = []
         self.logger = get_stage_logger(self.stage_id, self.name)
+        try:
+            from core.learning import get_learning_engine
+            self.learning_engine = get_learning_engine()
+        except Exception:
+            self.learning_engine = None
 
     def before_run(self, hook: Callable[[str, Dict[str, Any]], None]):
         """Register a callback hook before stage executes."""
@@ -147,6 +152,35 @@ class BaseStage(abc.ABC):
         elapsed = time.time() - context.get("t0", time.time())
         log_file = os.path.join(context.get("workspace", ""), "logs", f"stage_{self.stage_id:02d}_{self.name}.log")
 
+        # Query Learning Engine for adaptive recovery suggestions based on previous lessons
+        if self.learning_engine:
+            try:
+                adaptive_solutions = self.learning_engine.suggest_recovery(
+                    stage_id=self.stage_id,
+                    error_code=err_code,
+                    context=context
+                )
+                for item in adaptive_solutions:
+                    sol = item.get("solution")
+                    if sol:
+                        tip_str = f"[Öğrenilen Adaptif Çözüm]: {sol}"
+                        if tip_str not in suggestions:
+                            suggestions.append(tip_str)
+                            self.logger.info(f"  -> {tip_str}")
+
+                # Record stage failure in persistent memory
+                self.learning_engine.record_stage_run(
+                    stage_id=self.stage_id,
+                    stage_name=self.name,
+                    status="error",
+                    elapsed_sec=elapsed,
+                    context=context,
+                    error_code=err_code,
+                    error_message=err_msg
+                )
+            except Exception as le_err:
+                self.logger.debug(f"Learning engine recovery suggestion failed: {le_err}")
+
         return StageResult(
             stage_name=self.name,
             status="error",
@@ -216,6 +250,20 @@ class BaseStage(abc.ABC):
                 h(result)
             except Exception as e:
                 self.logger.warning(f"Post-hook uyarısı: {e}")
+
+        # 6. Record success in Learning Engine
+        if self.learning_engine:
+            try:
+                self.learning_engine.record_stage_run(
+                    stage_id=self.stage_id,
+                    stage_name=self.name,
+                    status="success",
+                    elapsed_sec=elapsed,
+                    context=context,
+                    data=data
+                )
+            except Exception as le_err:
+                self.logger.debug(f"Learning engine record_stage_run failed: {le_err}")
 
         self.logger.info(f"\033[1;32m[OK]\033[0m {self.name} başarıyla tamamlandı ({elapsed:.2f}s).")
         return result

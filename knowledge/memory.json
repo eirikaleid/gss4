@@ -1,0 +1,95 @@
+{
+  "version": "1.0.0",
+  "created_at": 1793566958.0217705,
+  "runs_count": 0,
+  "runs_history": [],
+  "lessons": [
+    {
+      "id": "lesson_init_001",
+      "topic": "decryption_magic",
+      "problem": "ERR_UNKNOWN_STRATEGY",
+      "solution": "Profil ayarlarındaki 'decrypt_strategy' parametresini 'auto' veya hedef oyunun korumasına uygun strateji olarak yapılandırın.",
+      "stage_id": 3,
+      "error_code": "ERR_UNKNOWN_STRATEGY",
+      "tags": [
+        "stage3",
+        "decrypt",
+        "strategy"
+      ],
+      "confidence": 1.0,
+      "hit_count": 1,
+      "created_time": 1793566958.0217714,
+      "context": {}
+    },
+    {
+      "id": "lesson_init_002",
+      "topic": "xor_ramp_failure",
+      "problem": "ERR_DECRYPTION_FAILED",
+      "solution": "Oyun güncellemesiyle XOR rampa parametreleri değiştiğinde 'frida_live' bellek dökümü stratejisini fallback olarak devreye alın.",
+      "stage_id": 3,
+      "error_code": "ERR_DECRYPTION_FAILED",
+      "tags": [
+        "stage3",
+        "decrypt",
+        "gups",
+        "frida"
+      ],
+      "confidence": 1.0,
+      "hit_count": 1,
+      "created_time": 1793566958.0217729,
+      "context": {}
+    },
+    {
+      "id": "lesson_init_003",
+      "topic": "arm64_instruction_alignment",
+      "problem": "ERR_UNALIGNED_INSTRUCTION",
+      "solution": "ARM64 mimarisinde metot RVA adresleri 4 bayta tam bölünmelidir (RVA % 4 == 0). Adresin veri alanı veya Thumb değil, 64-bit opcode olduğunu doğrulayın.",
+      "stage_id": 7,
+      "error_code": "ERR_UNALIGNED_INSTRUCTION",
+      "tags": [
+        "stage7",
+        "verify",
+        "alignment"
+      ],
+      "confidence": 1.0,
+      "hit_count": 1,
+      "created_time": 1793566958.021774,
+      "context": {}
+    },
+    {
+      "id": "lesson_init_004",
+      "topic": "metadata_input_missing",
+      "problem": "ERR_INPUT_METADATA_NOT_FOUND",
+      "solution": "global-metadata.dat eksik. Stage 2 (extract) çıktısının workspace/bin dizininde doğru oluştuğunu ve APK mimarisini (--arch) kontrol edin.",
+      "stage_id": 3,
+      "error_code": "ERR_INPUT_METADATA_NOT_FOUND",
+      "tags": [
+        "stage3",
+        "extract",
+        "inputs"
+      ],
+      "confidence": 1.0,
+      "hit_count": 1,
+      "created_time": 1793566958.0217745,
+      "context": {}
+    },
+    {
+      "id": "lesson_init_005",
+      "topic": "undefined_source_symbols",
+      "problem": "ERR_STAGE_07_VERIFY",
+      "solution": "Kaynak kodda kullanılan semboller yeni header'da bulunamadı. dump.cs içinde sınıf yeniden adlandırma (obfuscation) kontrolü yapın veya alias haritasını güncelleyin.",
+      "stage_id": 7,
+      "error_code": "ERR_STAGE_07_VERIFY",
+      "tags": [
+        "stage7",
+        "verify",
+        "symbols",
+        "alias"
+      ],
+      "confidence": 1.0,
+      "hit_count": 1,
+      "created_time": 1793566958.021775,
+      "context": {}
+    }
+  ]
+}

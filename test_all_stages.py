@@ -25,6 +25,7 @@ STAGES = [
     ("Multi-Engine & Common IR", os.path.join(ROOT_DIR, "tests", "test_multi_engine.py")),
     ("Ghidra & REA Static Integration", os.path.join(ROOT_DIR, "tests", "test_ghidra_rea_integration.py")),
     ("Frida Dynamic Analysis & Live Memory", os.path.join(ROOT_DIR, "tests", "test_frida_integration.py")),
+    ("Self-Learning & Knowledge Engine", os.path.join(ROOT_DIR, "tests", "test_learning_engine.py")),
 ]
 
 
@@ -33,18 +34,28 @@ def main():
     t0 = time.time()
     passed = 0
 
-    for title, test_script in STAGES:
-        if not os.path.exists(test_script):
-            print(f"[SKIP] {title}: test script not found ({test_script})")
-            continue
+    import shutil
+    import tempfile
+    temp_knowledge_dir = tempfile.mkdtemp(prefix="gss4_test_knowledge_")
+    env = os.environ.copy()
+    env["GSS4_KNOWLEDGE_DIR"] = temp_knowledge_dir
 
-        res = subprocess.run([sys.executable, test_script], cwd=os.path.dirname(test_script),
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
-        if res.returncode == 0:
-            print(f"\033[1;32m[PASS]\033[0m {title}")
-            passed += 1
-        else:
-            print(f"\033[1;31m[FAIL]\033[0m {title}\n{res.stdout}")
+    try:
+        for title, test_script in STAGES:
+            if not os.path.exists(test_script):
+                print(f"[SKIP] {title}: test script not found ({test_script})")
+                continue
+
+            res = subprocess.run([sys.executable, test_script], cwd=os.path.dirname(test_script),
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False,
+                                 env=env)
+            if res.returncode == 0:
+                print(f"\033[1;32m[PASS]\033[0m {title}")
+                passed += 1
+            else:
+                print(f"\033[1;31m[FAIL]\033[0m {title}\n{res.stdout}")
+    finally:
+        shutil.rmtree(temp_knowledge_dir, ignore_errors=True)
 
     elapsed = time.time() - t0
     print(f"\n=======================================================")

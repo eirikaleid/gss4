@@ -66,7 +66,10 @@ def load_profile(profile_arg):
 
 def execute_pipeline(profile="royale", package=None, device=None, arch=None, apk=None,
                      stage=None, from_stage=1, apply=False, out_header=None, workspace=None,
-                     known=None, src=None):
+                     known=None, src=None, knowledge_dir=None):
+    if knowledge_dir:
+        os.environ["GSS4_KNOWLEDGE_DIR"] = os.path.abspath(knowledge_dir)
+
     if isinstance(profile, str):
         profile_data = load_profile(profile)
     else:
@@ -205,6 +208,28 @@ def execute_pipeline(profile="royale", package=None, device=None, arch=None, apk
         print(f"\033[1;33mNote: Run with '--apply' to update {dest_header}\033[0m")
     print(f"\033[1;32m=======================================================\033[0m\n")
 
+    # Record holistic pipeline run in Learning Engine
+    try:
+        from core.learning import get_learning_engine
+        le = get_learning_engine()
+        le.learn_from_run(
+            run_context={
+                "profile": app_name,
+                "package": app_package,
+                "device": app_device,
+                "arch": app_arch,
+                "workspace": ws
+            },
+            results={
+                "status": "success",
+                "elapsed_sec": round(total_time, 2),
+                "header_path": new_header,
+                "json_path": new_json
+            }
+        )
+    except Exception:
+        pass
+
     return {
         "status": "success",
         "app_name": app_name,
@@ -229,6 +254,7 @@ def main():
     parser.add_argument("--workspace", help="Override workspace/build directory")
     parser.add_argument("--known", help="Assert specific known version checks (e.g. 4.9)")
     parser.add_argument("--src", help="Path to project source folder to check undefined symbols")
+    parser.add_argument("--knowledge-dir", help="Override persistent knowledge base storage directory (default: ./knowledge)")
 
     args = parser.parse_args()
     execute_pipeline(
@@ -243,7 +269,8 @@ def main():
         out_header=args.out_header,
         workspace=args.workspace,
         known=args.known,
-        src=args.src
+        src=args.src,
+        knowledge_dir=args.knowledge_dir
     )
 
 

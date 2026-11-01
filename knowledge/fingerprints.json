@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "fingerprints": {
+    "fp_generic_plaintext": {
+      "description": "Standard unencrypted IL2CPP global-metadata.dat",
+      "magic_hex": "af1bb1fa",
+      "proven_strategies": {
+        "passthrough": {
+          "strategy_name": "passthrough",
+          "success_count": 10,
+          "failure_count": 0,
+          "success_rate": 1.0,
+          "last_success_time": 1793566958.0234485,
+          "last_used_time": 1793566958.0234485,
+          "proven_configurations": [],
+          "details": {
+            "notes": "Default standard Unity plaintext metadata"
+          }
+        }
+      }
+    },
+    "fp_royale_gups": {
+      "description": "F8 Games Royale encrypted metadata",
+      "package": "net.f8games.royale",
+      "proven_strategies": {
+        "gups": {
+          "strategy_name": "gups",
+          "success_count": 5,
+          "failure_count": 0,
+          "success_rate": 1.0,
+          "last_success_time": 1793566958.0234506,
+          "last_used_time": 1793566958.0234509,
+          "proven_configurations": [],
+          "details": {
+            "notes": "Multi-round XOR ramp deobfuscation"
+          }
+        }
+      }
+    }
+  }
+}

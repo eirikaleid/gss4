@@ -316,16 +316,80 @@ def resolve_typeinfo(script_json_path, so_path, profile):
     return resolved
 
 
-def extract_data_model(profile, model, typeinfo_map, native_offsets):
+def extract_data_model(profile, model, typeinfo_map, native_offsets, learning_engine=None):
     priority_classes = profile.get("priority_classes", {})
     field_classes = profile.get("field_classes", [])
     keywords = [kw.lower() for kw in profile.get("keywords", [])]
     method_cap = profile.get("method_cap", 200)
+    pkg = profile.get("package", "unknown")
+
+    le = learning_engine
+    if le is None:
+        try:
+            from core.learning import get_learning_engine
+            le = get_learning_engine()
+        except Exception:
+            le = None
+
+    # Register any predefined aliases from profile into knowledge engine
+    if le and profile.get("alias_mappings"):
+        for can_name, al_name in profile.get("alias_mappings", {}).items():
+            le.record_alias_mapping(
+                package=pkg,
+                canonical_name=can_name,
+                alias_name=al_name,
+                confidence=1.0,
+                evidence=["profile_predefined"]
+            )
+
+    def pick_class_with_learning(cname, meth_spec=None):
+        k = model.pick(cname)
+        if k:
+            return k
+        if not le:
+            return None
+
+        # 1. Check existing learned alias in knowledge base
+        alias = le.resolve_alias(pkg, cname)
+        if alias:
+            k = model.pick(alias)
+            if k:
+                return k
+
+        # 2. Heuristic candidate matching if class was renamed/obfuscated
+        if meth_spec:
+            target_sig = {
+                "methods": [{"name": m, "param_count": p} for m, p in meth_spec.items()],
+                "field_count": 0
+            }
+            cands = []
+            for cand_k in model.classes:
+                if cand_k.kind == "class" and not cand_k.name.startswith("<"):
+                    cands.append({
+                        "name": cand_k.name,
+                        "field_count": len(cand_k.fields),
+                        "methods": [{"name": m[0], "param_count": m[1]} for m in cand_k.methods]
+                    })
+            match_res = le.find_candidate_alias(pkg, target_sig, cands, threshold=0.5)
+            if match_res:
+                cand_name, score, evidence = match_res
+                matched_k = model.pick(cand_name)
+                if matched_k:
+                    le.record_alias_mapping(
+                        package=pkg,
+                        canonical_name=cname,
+                        alias_name=cand_name,
+                        confidence=score,
+                        evidence=evidence,
+                        discovered_version=str(profile.get("version", "current"))
+                    )
+                    return matched_k
+        return None
 
     # 1. Methods
     methods = OrderedDict()
     for cname, meth_spec in priority_classes.items():
-        k = model.pick(cname)
+        k = pick_class_with_learning(cname, meth_spec)
         if not k:
             continue
         for mname, expected_params in meth_spec.items():
@@ -356,7 +420,7 @@ def extract_data_model(profile, model, typeinfo_map, native_offsets):
     # 2. Fields
     fields = OrderedDict()
     for cname in field_classes:
-        k = model.pick(cname)
+        k = pick_class_with_learning(cname)
         if not k:
             continue
         fields[cname] = OrderedDict()
@@ -452,7 +516,7 @@ class Stage6Parse(BaseStage):
                 with open(native_json, "r", encoding="utf-8") as nf:
                     native_offsets = json.load(nf)
 
-            data = extract_data_model(profile_data, model, typeinfos, native_offsets)
+            data = extract_data_model(profile_data, model, typeinfos, native_offsets, learning_engine=self.learning_engine)
 
             # Convert to Common IR and save for future multi-engine compatibility
             if CommonIR is not None:

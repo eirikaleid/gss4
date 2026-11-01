@@ -1,30 +1,59 @@
-# Build & temporary artifacts
+# Build, workspace & temporary runtime artifacts
 build/
 bin/
 apk/
 dump/
+workspace/
+workspaces/
+temp*/
+tmp*/
+logs/
+out/
+output/
+dist/
+extracted/
+
+# Binary files & game assets
 *.apk
+*.xapk
+*.apks
+*.obb
 *.so
 *.dat
 *.dec.dat
+*.dump
+*.bin
 
 # Logs & temp
 *.log
+*.tmp
+*.bak
+*.swp
 il2cppdumper.log
 il2cppdumper.err.log
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
 .venv/
 venv/
 env/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Backups
 backups/
 .backups/
 
-# OS
+# IDE & Editor settings
+.idea/
+.vscode/
+*.suo
+*.user
+
+# OS metadata
 .DS_Store
 Thumbs.db
+desktop.ini

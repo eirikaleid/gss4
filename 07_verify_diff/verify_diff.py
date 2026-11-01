@@ -192,7 +192,34 @@ def verify_and_diff(new_path, old_path=None, so_path=None, src_dir=None,
     if fails:
         raise ValueError(f"Verification errors:\n" + "\n".join(f"  * {f}" for f in fails))
 
-    # 5. Apply
+    # 5. Record verified drift pattern in Learning Engine
+    if changes:
+        try:
+            from core.learning import get_learning_engine
+            le = get_learning_engine()
+            target_pkg = package or (profile_data.get("package") if profile_data else "unknown")
+            from_v = (profile_data.get("previous_version") if profile_data else None) or "previous"
+            to_v = known_tag or (profile_data.get("version") if profile_data else None) or "current"
+            shifts = {sym: new_val - old_val for sym, old_val, new_val in changes}
+            le.record_drift_pattern(
+                package=str(target_pkg),
+                from_version=str(from_v),
+                to_version=str(to_v),
+                shifts=shifts,
+                metadata={
+                    "constants_count": len(new_map),
+                    "changes_count": len(changes),
+                    "added_count": len(added),
+                    "removed_count": len(removed)
+                }
+            )
+            if logger:
+                logger.info(f"Öğrenme Motoru: {len(shifts)} sembol için sürüm kayma (drift) paterni kaydedildi.")
+        except Exception as drift_err:
+            if logger:
+                logger.debug(f"Learning engine record_drift_pattern failed: {drift_err}")
+
+    # 6. Apply
     applied_file = None
     if apply_to:
         dst = os.path.abspath(apply_to)

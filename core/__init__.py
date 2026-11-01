@@ -21,6 +21,17 @@ from .engine_provider import (
     get_engine_provider,
     list_supported_engines
 )
+from .learning import (
+    LearningEngine,
+    get_learning_engine,
+    extract_fingerprint,
+    calculate_shannon_entropy,
+    BinaryFingerprint,
+    StrategyRecord,
+    AliasRecord,
+    DriftRecord,
+    LearnedLesson
+)
 
 __all__ = [
     "BaseStage",
@@ -45,4 +56,13 @@ __all__ = [
     "EngineVerificationPolicy",
     "get_engine_provider",
     "list_supported_engines",
+    "LearningEngine",
+    "get_learning_engine",
+    "extract_fingerprint",
+    "calculate_shannon_entropy",
+    "BinaryFingerprint",
+    "StrategyRecord",
+    "AliasRecord",
+    "DriftRecord",
+    "LearnedLesson",
 ]

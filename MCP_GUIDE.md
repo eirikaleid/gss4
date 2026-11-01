@@ -23,6 +23,9 @@ GSS4, yapay zeka asistanlarının (Claude, Gemini, Cursor, Antigravity vb.) doğ
 | `decompile_symbol` | Hedef fonksiyonu / sembolü Ghidra veya REA ile C++/ARM64 olarak decompile eder. | `{"rva": "0x100004", "engine": "ghidra"}` |
 | `search_native_xrefs` | Native binary içinde string veya sembol referanslarını (XREF) tarar. | `{"needle": "libswappywrapper", "engine": "auto"}` |
 | `inspect_metadata_rea` | IL2CPP `global-metadata.dat` dosyasını REA motoruyla analiz eder. | `{"metadata": "build/royale/bin/global-metadata.dat"}` |
+| `get_learned_knowledge` | Öğrenilen stratejileri, alias eşlemelerini, drift paternlerini ve dersleri döner. | `{"query": "CharacterManager", "category": "aliases"}` |
+| `record_learned_lesson` | Dışarıdan veya ajandan gelen tecrübe ve arıza çözümlerini kalıcı bilgi tabanına kaydeder. | `{"topic": "anticheat", "problem": "ERR_X", "solution": "Y"}` |
+| `suggest_adaptation` | Hata veya drift anında geçmiş tecrübelerden adaptif çözüm önerir. | `{"package": "net.f8games.royale", "error_code": "ERR_DECRYPTION_FAILED"}` |
 
 ---
 
