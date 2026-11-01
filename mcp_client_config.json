@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "gss4-offset-pipeline": {
+      "command": "python",
+      "args": [
+        "C:\\Users\\MonsterTesla\\Desktop\\gss4\\mcp_server.py"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}
